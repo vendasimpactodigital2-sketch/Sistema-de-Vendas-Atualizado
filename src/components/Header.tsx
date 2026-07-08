@@ -6,7 +6,6 @@ import { isSupabaseConfigured, dbGetSupportFeedbacks } from "../supabase";
 import { NexvoltLogo } from "./NexvoltLogo";
 import { RemindersCalendarModal } from "./RemindersCalendarModal";
 import { CalculatorModal } from "./CalculatorModal";
-import { MetaProgressModal } from "./MetaProgressModal";
 
 interface HeaderProps {
   activeTab: "sale" | "dashboard" | "company" | "gastos" | "usuarios" | "relatorios" | "produtos" | "gastosMeta" | "clientes" | "suporte";
@@ -139,7 +138,6 @@ export function Header({
   });
   const [isPanelOpen, setIsPanelOpen] = React.useState(false);
   const [isCalendarOpen, setIsCalendarOpen] = React.useState(false);
-  const [isMetaModalOpen, setIsMetaModalOpen] = React.useState(false);
 
   React.useEffect(() => {
     const syncReminders = () => {
@@ -659,19 +657,14 @@ export function Header({
 
           {/* Real-time "Falta para Meta" Square Card directly below the clock */}
           {dailyMetaGoal > 0 && (
-            <button
-              type="button"
-              onClick={() => setIsMetaModalOpen(true)}
-              className={`p-1.5 px-3 rounded-xl border flex flex-col justify-center text-center select-none duration-200 transition-all shrink-0 h-9 cursor-pointer hover:scale-[1.03] active:scale-[0.98] ${
-                isGoalReached
-                  ? "border-emerald-500/30 bg-emerald-950/20 text-emerald-400 hover:border-emerald-450 hover:bg-emerald-950/30"
-                  : isNearGoal
-                    ? "border-sky-500/30 bg-sky-950/20 text-sky-450 shadow-[0_0_12px_rgba(14,165,233,0.15)] hover:border-sky-450 hover:bg-sky-950/30"
-                    : "border-amber-500/20 bg-amber-950/10 text-amber-500 hover:border-amber-500/40 hover:bg-amber-950/20"
-              }`}
-              title="Clique para ver o progresso detalhado e gráficos da meta"
-            >
-              <div className="flex items-center justify-between gap-3 text-left leading-none w-full">
+            <div className={`p-1.5 px-3 rounded-xl border flex flex-col justify-center text-center select-none duration-300 transition-all shrink-0 h-9 ${
+              isGoalReached
+                ? "border-emerald-500/30 bg-emerald-950/20 text-emerald-400"
+                : isNearGoal
+                  ? "border-sky-500/30 bg-sky-950/20 text-sky-450 shadow-[0_0_12px_rgba(14,165,233,0.15)]"
+                  : "border-amber-500/20 bg-amber-950/10 text-amber-500"
+            }`}>
+              <div className="flex items-center justify-between gap-3 text-left leading-none">
                 <div className="flex items-center gap-1">
                   <span className="relative flex h-2.5 w-2.5 shrink-0 items-center justify-center">
                     {!isGoalReached && !isNearGoal && (
@@ -689,7 +682,7 @@ export function Header({
                         : isNearGoal 
                           ? "text-sky-450 animate-pulse scale-105" 
                           : "text-amber-500 animate-pulse"
-                     }`} />
+                    }`} />
                   </span>
                   
                   <span className="text-[9px] uppercase tracking-wider text-slate-450 font-bold">
@@ -724,7 +717,7 @@ export function Header({
                   </span>
                 )}
               </div>
-            </button>
+            </div>
           )}
 
           {/* Real-time "Materiais para entregar hoje" clickable */}
@@ -829,13 +822,6 @@ export function Header({
         <CalculatorModal
           isOpen={isCalculatorOpen}
           onClose={() => setIsCalculatorOpen(false)}
-        />
-
-        <MetaProgressModal
-          isOpen={isMetaModalOpen}
-          onClose={() => setIsMetaModalOpen(false)}
-          dailyMetaGoal={dailyMetaGoal}
-          todayNetProfitLive={todayNetProfitLive}
         />
       </div>
     </header>

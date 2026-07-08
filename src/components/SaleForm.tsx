@@ -1076,7 +1076,6 @@ export function SaleForm({
       orderDate: actualOrderDate,
       deliveryDate: actualDeliveryDate,
       materialEntregue: isQuickSale ? true : (activeEditingSale?.materialEntregue || false),
-      deliveryStatus: isQuickSale ? 'entregue' : (activeEditingSale?.materialEntregue ? 'entregue' : (activeEditingSale?.deliveryStatus || 'pendente')),
       payments: isQuickSale 
         ? [{
             id: Math.random().toString(36).substring(2, 9).toUpperCase(),
