@@ -886,6 +886,7 @@ export async function dbGetSales(userId: string): Promise<Sale[] | null> {
       let deliveryDate = "";
       let deliveryReason = "";
       let payments: any[] = [];
+      let materialEntregue = false;
       if (realPhone.includes("::")) {
         const parts = realPhone.split("::");
         realPhone = parts[0];
@@ -895,6 +896,7 @@ export async function dbGetSales(userId: string): Promise<Sale[] | null> {
           deliveryDate = meta.deliveryDate || "";
           deliveryReason = meta.deliveryReason || "";
           payments = meta.payments || [];
+          materialEntregue = !!meta.materialEntregue;
         } catch (e) {}
       }
       return {
@@ -919,7 +921,8 @@ export async function dbGetSales(userId: string): Promise<Sale[] | null> {
         orderDate: orderDate || undefined,
         deliveryDate: deliveryDate || undefined,
         deliveryReason: deliveryReason || undefined,
-        payments: payments
+        payments: payments,
+        materialEntregue: materialEntregue
       };
     });
   } catch (err) {
@@ -936,7 +939,8 @@ export async function dbSaveSale(userId: string, sale: Sale): Promise<boolean> {
     orderDate: sale.orderDate, 
     deliveryDate: sale.deliveryDate,
     deliveryReason: sale.deliveryReason || "",
-    payments: sale.payments || []
+    payments: sale.payments || [],
+    materialEntregue: !!sale.materialEntregue
   });
   const clientPhoneWithMeta = `${sale.clientPhone || ""}::${metaStr}`;
 

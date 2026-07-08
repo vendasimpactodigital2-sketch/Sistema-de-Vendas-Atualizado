@@ -79,6 +79,7 @@ export interface Sale {
   deliveryDate?: string; // data de entrega
   deliveryReason?: string; // motivo de reagendamento / observação da entrega
   payments?: SalePayment[]; // precise payment history logs for cash flow
+  materialEntregue?: boolean; // indica se o material já foi entregue/retirado pelo cliente
 }
 
 export interface DashboardStats {

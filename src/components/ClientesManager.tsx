@@ -412,6 +412,7 @@ export const ClientesManager: React.FC<ClientesManagerProps> = ({
 
     if (baixaDeliverToday) {
       updatedSale.deliveryDate = new Date().toISOString().substring(0, 10);
+      updatedSale.materialEntregue = true;
     }
 
     try {

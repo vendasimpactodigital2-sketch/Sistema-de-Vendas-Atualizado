@@ -3037,22 +3037,62 @@ export default function App() {
 
     // Sum standalone expenses created during active session
     let expensesTotal = 0;
+    let expensesPaidInCash = 0;
+
+    const parseExpenseDescription = (desc: string) => {
+      if (!desc) return { cleanDesc: "", method: "dinheiro" };
+      const trimmed = desc.trim();
+      if (trimmed.startsWith("[Dinheiro]")) {
+        return { cleanDesc: trimmed.replace("[Dinheiro]", "").trim(), method: "dinheiro" };
+      }
+      if (trimmed.startsWith("[Pix]")) {
+        return { cleanDesc: trimmed.replace("[Pix]", "").trim(), method: "pix" };
+      }
+      if (trimmed.startsWith("[Cartão]") || trimmed.startsWith("[Cartao]")) {
+        return { cleanDesc: trimmed.replace(/\[Cartã?o\]/, "").trim(), method: "cartão" };
+      }
+      
+      const lower = trimmed.toLowerCase();
+      if (lower.startsWith("[dinheiro]")) {
+        return { cleanDesc: trimmed.substring(10).trim(), method: "dinheiro" };
+      }
+      if (lower.startsWith("[pix]")) {
+        return { cleanDesc: trimmed.substring(5).trim(), method: "pix" };
+      }
+      if (lower.startsWith("[cartão]") || lower.startsWith("[cartao]")) {
+        return { cleanDesc: trimmed.replace(/\[cartã?o\]/i, "").trim(), method: "cartão" };
+      }
+
+      // Word matches:
+      if (lower.includes("dinheiro")) return { cleanDesc: trimmed, method: "dinheiro" };
+      if (lower.includes("pix")) return { cleanDesc: trimmed, method: "pix" };
+      if (lower.includes("cartão") || lower.includes("cartao")) return { cleanDesc: trimmed, method: "cartão" };
+
+      return { cleanDesc: trimmed, method: "dinheiro" };
+    };
+
     expenses.forEach((expense) => {
       if (!expense.date) return;
       if (isDateInSession(expense.date, currentSession)) {
-        expensesTotal += Number(expense.value) || 0;
+        const val = Number(expense.value) || 0;
+        expensesTotal += val;
+
+        const { method } = parseExpenseDescription(expense.description);
+        if (method === "dinheiro") {
+          expensesPaidInCash += val;
+        }
       }
     });
 
     const totalCustos = operationCosts + expensesTotal + totalMotoboy;
-    const expected = currentSession.valorAbertura + cashInflow - totalCustos;
+    const expected = currentSession.valorAbertura + cashInflow - expensesPaidInCash;
     const totalEntradas = cashInflow + pixInflow + cardInflow;
     const lucroLiquido = totalEntradas - totalCustos;
 
     const auditTrail = `📊 DETALHAMENTO DE FECHAMENTO DO DIA:\n` +
       `• Entradas / Sinais (Caixa): R$ ${totalEntradas.toFixed(2)}\n` +
       `• Entrada de Serviços: R$ ${totalSales.toFixed(2)}\n` +
-      `• Custos / Despesas Globais: R$ ${totalCustos.toFixed(2)} (Custo Operacional: R$ ${operationCosts.toFixed(2)} | Despesas: R$ ${expensesTotal.toFixed(2)} | Motoboy: R$ ${totalMotoboy.toFixed(2)})\n` +
+      `• Custos / Despesas Globais: R$ ${totalCustos.toFixed(2)} (Custo Operacional: R$ ${operationCosts.toFixed(2)} | Despesas Totais: R$ ${expensesTotal.toFixed(2)} (Dinheiro: R$ ${expensesPaidInCash.toFixed(2)}) | Motoboy: R$ ${totalMotoboy.toFixed(2)})\n` +
       `• Lucro Real do Turno: R$ ${lucroLiquido.toFixed(2)}\n` +
       `• Dinheiro Líquido Esperado na Gaveta: R$ ${expected.toFixed(2)}\n` +
       `• Recebido via Dinheiro: R$ ${cashInflow.toFixed(2)} | PIX: R$ ${pixInflow.toFixed(2)} | Cartão: R$ ${cardInflow.toFixed(2)}\n` +

@@ -119,9 +119,9 @@ export function PendingSalesModal({ isOpen, onClose, sales, onSaveSale, company,
 
   if (!isOpen) return null;
 
-  // Filter sales that have remaining outstanding balances (balanceDue > 0)
+  // Filter sales that have remaining outstanding balances (balanceDue > 0) OR are not yet delivered
   const pendingSales = sales.filter((sale) => {
-    const isPending = sale.balanceDue > 0;
+    const isPending = sale.balanceDue > 0 || sale.materialEntregue === false;
     const matchesSearch = 
       sale.clientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       sale.clientPhone.replace(/\D/g, "").includes(searchTerm.replace(/\D/g, ""));
@@ -698,6 +698,28 @@ export function PendingSalesModal({ isOpen, onClose, sales, onSaveSale, company,
     }, 4000);
   };
 
+  // Confirm ONLY the delivery / withdrawal of the material (when balanceDue is already 0)
+  const handleConfirmOnlyDelivery = (sale: Sale) => {
+    const originalOrderDate = sale.orderDate || (sale.date ? getLocalYMD(sale.date) : getLocalYMD(new Date().toISOString()));
+
+    const updatedSale: Sale = {
+      ...sale,
+      deliveryDate: new Date().toISOString().substring(0, 10), // Register delivery / withdrawal today
+      materialEntregue: true,
+      orderDate: originalOrderDate,
+    };
+
+    // Save changes
+    onSaveSale(updatedSale);
+
+    // Provide immediate user visual feedback
+    setSuccessMessage(`Retirada de material registrada com sucesso para ${sale.clientName.toUpperCase()}!`);
+
+    setTimeout(() => {
+      setSuccessMessage(null);
+    }, 4000);
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-2 bg-slate-950/80 backdrop-blur-md overflow-y-auto">
       <div className="relative w-full max-w-4xl bg-slate-900 border border-slate-800 rounded-xl shadow-2xl flex flex-col my-4 max-h-[95vh]">
@@ -980,98 +1002,138 @@ export function PendingSalesModal({ isOpen, onClose, sales, onSaveSale, company,
                         <span className="text-slate-500 block uppercase">Sinal</span>
                         <span className="text-[10px] font-bold text-emerald-400">{formatBRL(sale.downPayment)}</span>
                       </div>
-                      <div className="bg-yellow-500/10 p-1.5 rounded-lg border border-yellow-500/20">
-                        <span className="text-yellow-500/60 block uppercase">Pendente</span>
-                        <span className="text-[10px] font-extrabold text-yellow-500">{formatBRL(sale.balanceDue)}</span>
-                      </div>
+                      {sale.balanceDue > 0 ? (
+                        <div className="bg-yellow-500/10 p-1.5 rounded-lg border border-yellow-500/20">
+                          <span className="text-yellow-500/60 block uppercase">Pendente</span>
+                          <span className="text-[10px] font-extrabold text-yellow-500">{formatBRL(sale.balanceDue)}</span>
+                        </div>
+                      ) : (
+                        <div className="bg-emerald-500/15 p-1.5 rounded-lg border border-emerald-500/30">
+                          <span className="text-emerald-400 block uppercase font-bold text-[8px]">Status</span>
+                          <span className="text-[9px] font-black text-emerald-400 uppercase tracking-wider block">ND A RECEBER</span>
+                        </div>
+                      )}
                     </div>
 
                     {/* Form Input paying Area */}
-                    <div className="space-y-1.5 mt-0.5">
-                      <div className="flex items-center justify-between">
-                        <label className="text-[9px] uppercase font-bold text-slate-400">Receber Agora:</label>
-                        <button
-                          type="button"
-                          onClick={() => fillFullBalance(sale.id, sale.balanceDue)}
-                          className="text-[9px] text-brand-cyan hover:underline hover:text-brand-cyan/80 font-bold uppercase cursor-pointer"
-                        >
-                          Quitar Saldo
-                        </button>
-                      </div>
+                    {sale.balanceDue > 0 ? (
+                      <div className="space-y-1.5 mt-0.5">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[9px] uppercase font-bold text-slate-400">Receber Agora:</label>
+                          <button
+                            type="button"
+                            onClick={() => fillFullBalance(sale.id, sale.balanceDue)}
+                            className="text-[9px] text-brand-cyan hover:underline hover:text-brand-cyan/80 font-bold uppercase cursor-pointer"
+                          >
+                            Quitar Saldo
+                          </button>
+                        </div>
 
-                      <div className="relative">
-                        <span className="absolute left-2.5 top-1.5 text-[10px] font-mono font-bold text-slate-500">R$</span>
-                        <input
-                          type="text"
-                          value={paymentAmounts[sale.id] ?? ""}
-                          onChange={(e) => handlePaymentAmountChange(sale.id, e.target.value)}
-                          placeholder={sale.balanceDue.toFixed(2)}
-                          className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-7 pr-3 py-1 text-xs text-white font-mono font-bold focus:outline-none focus:border-brand-cyan transition-all"
-                        />
-                      </div>
+                        <div className="relative">
+                          <span className="absolute left-2.5 top-1.5 text-[10px] font-mono font-bold text-slate-500">R$</span>
+                          <input
+                            type="text"
+                            value={paymentAmounts[sale.id] ?? ""}
+                            onChange={(e) => handlePaymentAmountChange(sale.id, e.target.value)}
+                            placeholder={sale.balanceDue.toFixed(2)}
+                            className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-7 pr-3 py-1 text-xs text-white font-mono font-bold focus:outline-none focus:border-brand-cyan transition-all"
+                          />
+                        </div>
 
-                      {/* Meio de Recebimento Picker */}
-                      <div className="space-y-1">
-                        <span className="text-[8.5px] uppercase font-bold text-slate-400">Meio de Recebimento:</span>
-                        <div className="grid grid-cols-3 gap-1">
-                          {(['dinheiro', 'pix', 'cartão'] as const).map((meth) => {
-                            const isSel = (paymentMethods[sale.id] || sale.paymentMethod || 'dinheiro') === meth;
-                            return (
-                              <button
-                                key={meth}
-                                type="button"
-                                onClick={() => setPaymentMethods((prev) => ({ ...prev, [sale.id]: meth }))}
-                                className={`py-1 px-1 rounded-lg border text-[8.5px] font-black uppercase tracking-wider transition-all cursor-pointer ${
-                                  isSel
-                                    ? "bg-brand-cyan/20 border-brand-cyan text-brand-cyan font-extrabold"
-                                    : "bg-slate-950 border-slate-850 text-slate-500 hover:text-slate-350"
-                                }`}
-                              >
-                                {meth}
-                              </button>
-                            );
-                          })}
+                        {/* Meio de Recebimento Picker */}
+                        <div className="space-y-1">
+                          <span className="text-[8.5px] uppercase font-bold text-slate-400">Meio de Recebimento:</span>
+                          <div className="grid grid-cols-3 gap-1">
+                            {(['dinheiro', 'pix', 'cartão'] as const).map((meth) => {
+                              const isSel = (paymentMethods[sale.id] || sale.paymentMethod || 'dinheiro') === meth;
+                              return (
+                                <button
+                                  key={meth}
+                                  type="button"
+                                  onClick={() => setPaymentMethods((prev) => ({ ...prev, [sale.id]: meth }))}
+                                  className={`py-1 px-1 rounded-lg border text-[8.5px] font-black uppercase tracking-wider transition-all cursor-pointer ${
+                                    isSel
+                                      ? "bg-brand-cyan/20 border-brand-cyan text-brand-cyan font-extrabold"
+                                      : "bg-slate-950 border-slate-850 text-slate-500 hover:text-slate-350"
+                                  }`}
+                                >
+                                  {meth}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {/* Checkbox update Date */}
+                        <div className="flex items-center gap-1.5 py-0">
+                          <input
+                            type="checkbox"
+                            id={`update-date-${sale.id}`}
+                            checked={shouldUpdateDate}
+                            onChange={() => toggleUpdateDate(sale.id)}
+                            className="rounded bg-slate-950 border-slate-800 text-brand-magenta focus:ring-0 h-3 w-3 cursor-pointer"
+                          />
+                          <label 
+                            htmlFor={`update-date-${sale.id}`} 
+                            className="text-[8.5px] text-slate-400 font-medium cursor-pointer select-none"
+                          >
+                            Lançar data como HOJE para constar no caixa atual
+                          </label>
+                        </div>
+
+                        {/* Actions Confirmation buttons */}
+                        <div className="flex gap-1.5 pt-1.5 border-t border-slate-900">
+                          <button
+                            type="button"
+                            onClick={() => handleConfirmPayment(sale)}
+                            className="flex-grow bg-emerald-600 hover:bg-emerald-500 active:scale-[0.98] text-white py-1.5 px-2.5 rounded-lg font-bold text-xs flex items-center justify-center gap-1 transition-all shadow-md shadow-emerald-950/20 cursor-pointer"
+                          >
+                            <Check className="h-3 w-3" />
+                            <span>Dar Baixa</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => generateUpdatedPDF(sale)}
+                            title="Imprimir Recibo Atual"
+                            className="bg-slate-950 hover:bg-slate-900 border border-slate-800 text-slate-300 hover:text-white p-1.5 rounded-lg transition-all cursor-pointer"
+                          >
+                            <Printer className="h-3.5 w-3.5" />
+                          </button>
                         </div>
                       </div>
+                    ) : (
+                      <div className="space-y-3 mt-1.5 flex-grow flex flex-col justify-between">
+                        <div className="p-3 bg-emerald-500/10 border border-emerald-500/15 rounded-xl text-center space-y-1">
+                          <p className="text-[10px] text-emerald-400 font-bold uppercase tracking-wide">
+                            Pedido Totalmente Pago! 📄
+                          </p>
+                          <p className="text-[9px] text-slate-400 leading-normal">
+                            Nenhum saldo pendente a receber. Registre apenas a retirada física do material do cliente.
+                          </p>
+                        </div>
 
-                      {/* Checkbox update Date */}
-                      <div className="flex items-center gap-1.5 py-0">
-                        <input
-                          type="checkbox"
-                          id={`update-date-${sale.id}`}
-                          checked={shouldUpdateDate}
-                          onChange={() => toggleUpdateDate(sale.id)}
-                          className="rounded bg-slate-950 border-slate-800 text-brand-magenta focus:ring-0 h-3 w-3 cursor-pointer"
-                        />
-                        <label 
-                          htmlFor={`update-date-${sale.id}`} 
-                          className="text-[8.5px] text-slate-400 font-medium cursor-pointer select-none"
-                        >
-                          Lançar data como HOJE para constar no caixa atual
-                        </label>
+                        <div className="flex gap-1.5 pt-1.5 border-t border-slate-900">
+                          <button
+                            type="button"
+                            onClick={() => handleConfirmOnlyDelivery(sale)}
+                            className="flex-grow bg-emerald-600 hover:bg-emerald-500 active:scale-[0.98] text-white py-2 px-2.5 rounded-lg font-black text-xs uppercase tracking-wide flex items-center justify-center gap-1.5 transition-all shadow-md shadow-emerald-950/20 cursor-pointer"
+                          >
+                            <Check className="h-3.5 w-3.5" />
+                            <span>Confirmar Retirada</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => generateUpdatedPDF(sale)}
+                            title="Imprimir Recibo Atual"
+                            className="bg-slate-950 hover:bg-slate-900 border border-slate-800 text-slate-300 hover:text-white p-2 rounded-lg transition-all cursor-pointer"
+                          >
+                            <Printer className="h-4 w-4" />
+                          </button>
+                        </div>
                       </div>
-
-                      {/* Actions Confirmation buttons */}
-                      <div className="flex gap-1.5 pt-1.5 border-t border-slate-900">
-                        <button
-                          type="button"
-                          onClick={() => handleConfirmPayment(sale)}
-                          className="flex-grow bg-emerald-600 hover:bg-emerald-500 active:scale-[0.98] text-white py-1.5 px-2.5 rounded-lg font-bold text-xs flex items-center justify-center gap-1 transition-all shadow-md shadow-emerald-950/20 cursor-pointer"
-                        >
-                          <Check className="h-3 w-3" />
-                          <span>Dar Baixa</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => generateUpdatedPDF(sale)}
-                          title="Imprimir Recibo Atual"
-                          className="bg-slate-950 hover:bg-slate-900 border border-slate-800 text-slate-300 hover:text-white p-1.5 rounded-lg transition-all cursor-pointer"
-                        >
-                          <Printer className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    </div>
+                    )}
                   </div>
                 </div>
               );

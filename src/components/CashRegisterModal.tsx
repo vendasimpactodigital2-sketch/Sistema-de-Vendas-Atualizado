@@ -204,17 +204,57 @@ export function CashRegisterModal({
 
     // Sum standalone expenses created on the same local date as the active session
     let expensesTotal = 0;
+    let expensesPaidInCash = 0;
+
+    const parseExpenseDescription = (desc: string) => {
+      if (!desc) return { cleanDesc: "", method: "dinheiro" };
+      const trimmed = desc.trim();
+      if (trimmed.startsWith("[Dinheiro]")) {
+        return { cleanDesc: trimmed.replace("[Dinheiro]", "").trim(), method: "dinheiro" };
+      }
+      if (trimmed.startsWith("[Pix]")) {
+        return { cleanDesc: trimmed.replace("[Pix]", "").trim(), method: "pix" };
+      }
+      if (trimmed.startsWith("[Cartão]") || trimmed.startsWith("[Cartao]")) {
+        return { cleanDesc: trimmed.replace(/\[Cartã?o\]/, "").trim(), method: "cartão" };
+      }
+      
+      const lower = trimmed.toLowerCase();
+      if (lower.startsWith("[dinheiro]")) {
+        return { cleanDesc: trimmed.substring(10).trim(), method: "dinheiro" };
+      }
+      if (lower.startsWith("[pix]")) {
+        return { cleanDesc: trimmed.substring(5).trim(), method: "pix" };
+      }
+      if (lower.startsWith("[cartão]") || lower.startsWith("[cartao]")) {
+        return { cleanDesc: trimmed.replace(/\[cartã?o\]/i, "").trim(), method: "cartão" };
+      }
+
+      // Word matches:
+      if (lower.includes("dinheiro")) return { cleanDesc: trimmed, method: "dinheiro" };
+      if (lower.includes("pix")) return { cleanDesc: trimmed, method: "pix" };
+      if (lower.includes("cartão") || lower.includes("cartao")) return { cleanDesc: trimmed, method: "cartão" };
+
+      return { cleanDesc: trimmed, method: "dinheiro" };
+    };
+
     expenses.forEach((expense) => {
       if (!expense.date) return;
       if (isDateInSession(expense.date, session)) {
-        expensesTotal += Number(expense.value) || 0;
+        const val = Number(expense.value) || 0;
+        expensesTotal += val;
+
+        const { method } = parseExpenseDescription(expense.description);
+        if (method === "dinheiro") {
+          expensesPaidInCash += val;
+        }
       }
     });
 
     const totalEntradas = cashInflow + pixInflow + cardInflow;
     const totalCustos = operationCosts + expensesTotal + totalMotoboy;
     const lucroLiquido = totalEntradas - totalCustos;
-    const expectedInDrawer = startingCash + cashInflow - totalCustos;
+    const expectedInDrawer = startingCash + cashInflow - expensesPaidInCash;
 
     return {
       count,
@@ -225,6 +265,7 @@ export function CashRegisterModal({
       totalEntradas,
       operationCosts,
       expensesTotal,
+      expensesPaidInCash,
       totalMotoboy,
       totalCustos,
       lucroLiquido,
@@ -540,19 +581,43 @@ export function CashRegisterModal({
                     </strong>
                   </div>
                   <div className="flex justify-between items-center text-[11px]">
-                    <span>(+) Recebimento Dinheiro (Entradas Totais):</span>
+                    <span>(+) Recebimento em Dinheiro (Físico):</span>
                     <strong className="text-emerald-400 font-mono">
-                      + R$ {sessionStats.totalEntradas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                      + R$ {sessionStats.cashInflow.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                     </strong>
                   </div>
                   <div className="flex justify-between items-center text-[11px]">
-                    <span>(-) Total em Despesa (Custos):</span>
-                    <strong className="text-rose-400 font-mono">
-                      - R$ {sessionStats.totalCustos.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                    <span>(+) Recebimento em Pix (Digital):</span>
+                    <strong className="text-slate-400 font-mono">
+                      + R$ {sessionStats.pixInflow.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                     </strong>
                   </div>
-                  <div className="flex justify-between items-center text-[11px] font-bold border-t border-slate-900/60 pt-1 mt-1">
-                    <span className="text-emerald-400">(=) Dinheiro Lucro (Lucro Real):</span>
+                  <div className="flex justify-between items-center text-[11px] font-bold border-t border-slate-900/30">
+                    <span>(=) Total de Entradas (Sinais + Recebidos):</span>
+                    <strong className="text-slate-300 font-mono">
+                      R$ {sessionStats.totalEntradas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                    </strong>
+                  </div>
+                  <div className="flex justify-between items-center text-[11px] pt-1">
+                    <span>(-) Despesas Pagas em Dinheiro:</span>
+                    <strong className="text-rose-450 font-mono">
+                      - R$ {sessionStats.expensesPaidInCash.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                    </strong>
+                  </div>
+                  <div className="flex justify-between items-center text-[11px]">
+                    <span>(-) Outros Custos e Despesas (Sem Impacto na Gaveta):</span>
+                    <strong className="text-slate-500 font-mono font-normal">
+                      - R$ {(sessionStats.totalCustos - sessionStats.expensesPaidInCash).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                    </strong>
+                  </div>
+                  <div className="flex justify-between items-center text-[11px] font-bold border-t border-slate-900/30">
+                    <span>(=) Total de Despesas (Custos Globais):</span>
+                    <strong className="text-rose-400 font-mono">
+                      R$ {sessionStats.totalCustos.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                    </strong>
+                  </div>
+                  <div className="flex justify-between items-center text-[11px] font-bold">
+                    <span className="text-emerald-400">(=) Lucro Líquido Real (Turno):</span>
                     <strong className="text-emerald-400 font-mono">
                       R$ {sessionStats.lucroLiquido.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                     </strong>

@@ -120,6 +120,38 @@ const getLocalDateFromISO = (isoStr: string): string => {
   }
 };
 
+const parseExpenseDescription = (desc: string) => {
+  if (!desc) return { cleanDesc: "", method: "dinheiro" };
+  const trimmed = desc.trim();
+  if (trimmed.startsWith("[Dinheiro]")) {
+    return { cleanDesc: trimmed.replace("[Dinheiro]", "").trim(), method: "dinheiro" };
+  }
+  if (trimmed.startsWith("[Pix]")) {
+    return { cleanDesc: trimmed.replace("[Pix]", "").trim(), method: "pix" };
+  }
+  if (trimmed.startsWith("[Cartão]") || trimmed.startsWith("[Cartao]")) {
+    return { cleanDesc: trimmed.replace(/\[Cartã?o\]/, "").trim(), method: "cartão" };
+  }
+  
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith("[dinheiro]")) {
+    return { cleanDesc: trimmed.substring(10).trim(), method: "dinheiro" };
+  }
+  if (lower.startsWith("[pix]")) {
+    return { cleanDesc: trimmed.substring(5).trim(), method: "pix" };
+  }
+  if (lower.startsWith("[cartão]") || lower.startsWith("[cartao]")) {
+    return { cleanDesc: trimmed.replace(/\[cartã?o\]/i, "").trim(), method: "cartão" };
+  }
+
+  // Word matches:
+  if (lower.includes("dinheiro")) return { cleanDesc: trimmed, method: "dinheiro" };
+  if (lower.includes("pix")) return { cleanDesc: trimmed, method: "pix" };
+  if (lower.includes("cartão") || lower.includes("cartao")) return { cleanDesc: trimmed, method: "cartão" };
+
+  return { cleanDesc: trimmed, method: "dinheiro" };
+};
+
 const getSaleOrderDate = (sale: Sale): string => {
   if (sale.orderDate) return sale.orderDate;
   if (sale.payments && sale.payments.length > 0) {
@@ -133,6 +165,7 @@ export function ExpensesManager({ expenses, onAddExpense, onDeleteExpense, sales
   const [description, setDescription] = useState("");
   const [value, setValue] = useState("");
   const [category, setCategory] = useState("Materiais/Insumos");
+  const [paymentMethod, setPaymentMethod] = useState<"dinheiro" | "pix" | "cartão">("dinheiro");
   const [date, setDate] = useState(() => {
     const localDate = new Date();
     const year = localDate.getFullYear();
@@ -280,6 +313,7 @@ export function ExpensesManager({ expenses, onAddExpense, onDeleteExpense, sales
     setDescription("");
     setValue("");
     setCategory("Materiais/Insumos");
+    setPaymentMethod("dinheiro");
     const localDate = new Date();
     const year = localDate.getFullYear();
     const month = String(localDate.getMonth() + 1).padStart(2, '0');
@@ -361,9 +395,10 @@ export function ExpensesManager({ expenses, onAddExpense, onDeleteExpense, sales
       });
     };
 
+    const prefix = paymentMethod === "dinheiro" ? "[Dinheiro] " : paymentMethod === "pix" ? "[Pix] " : "[Cartão] ";
     const newExpense: Expense = {
       id: generateExpenseUUID(),
-      description: description.trim(),
+      description: prefix + description.trim(),
       value: numValue,
       date,
       category,
@@ -374,6 +409,7 @@ export function ExpensesManager({ expenses, onAddExpense, onDeleteExpense, sales
     // Reset form
     setDescription("");
     setValue("");
+    setPaymentMethod("dinheiro");
     setIsPreRegistered(false);
     setScannedFileName("");
     setScanError(null);
@@ -1183,24 +1219,43 @@ export function ExpensesManager({ expenses, onAddExpense, onDeleteExpense, sales
               </div>
             </div>
 
-            {/* Category dropdown */}
-            <div className="space-y-1">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">
-                Categoria / Classificação
-              </label>
-              <select
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                className={`w-full bg-slate-950 border rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-red-500 transition-all font-sans cursor-pointer ${
-                  isPreRegistered ? "border-amber-500/40 focus:border-amber-500" : "border-slate-850"
-                }`}
-              >
-                {CATEGORIES.map((cat) => (
-                  <option key={cat} value={cat}>
-                    {cat}
-                  </option>
-                ))}
-              </select>
+            {/* Category and Payment Method dropdowns */}
+            <div className="grid grid-cols-2 gap-3 font-sans">
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">
+                  Categoria / Classificação
+                </label>
+                <select
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value)}
+                  className={`w-full bg-slate-950 border rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-red-500 transition-all cursor-pointer ${
+                    isPreRegistered ? "border-amber-500/40 focus:border-amber-500" : "border-slate-850"
+                  }`}
+                >
+                  {CATEGORIES.map((cat) => (
+                    <option key={cat} value={cat}>
+                      {cat}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">
+                  Meio de Pagamento *
+                </label>
+                <select
+                  value={paymentMethod}
+                  onChange={(e) => setPaymentMethod(e.target.value as any)}
+                  className={`w-full bg-slate-950 border rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-red-500 transition-all cursor-pointer ${
+                    isPreRegistered ? "border-amber-500/40 focus:border-amber-500" : "border-slate-850"
+                  }`}
+                >
+                  <option value="dinheiro">💵 Dinheiro</option>
+                  <option value="pix">📱 Pix</option>
+                  <option value="cartão">💳 Cartão</option>
+                </select>
+              </div>
             </div>
 
             {successMsg && (
@@ -1299,29 +1354,40 @@ export function ExpensesManager({ expenses, onAddExpense, onDeleteExpense, sales
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-850/40">
-                  {displayedExpenses.map((expense) => (
-                    <tr key={expense.id} className="hover:bg-slate-900/40 transition-colors group">
-                      <td className="p-2.5 font-medium text-slate-200">
-                        <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 flex-wrap">
-                          <span>{expense.description}</span>
-                          {expense.isSaleCost && (
-                            <span 
-                              title="Origem: Mapeamento Automático de Pedido / Venda"
-                              className="text-[9px] font-mono uppercase bg-amber-500/10 text-amber-500 px-1.5 py-0.5 rounded border border-amber-500/10 font-bold max-w-fit"
-                            >
-                              AUTOMÁTICO DEVENDAS
+                  {displayedExpenses.map((expense) => {
+                    const { cleanDesc, method } = parseExpenseDescription(expense.description);
+                    return (
+                      <tr key={expense.id} className="hover:bg-slate-900/40 transition-colors group">
+                        <td className="p-2.5 font-medium text-slate-200">
+                          <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 flex-wrap">
+                            <span>{cleanDesc}</span>
+                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border uppercase max-w-fit flex items-center gap-1 ${
+                              method === "dinheiro" 
+                                ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/15" 
+                                : method === "pix"
+                                  ? "bg-sky-500/10 text-sky-400 border-sky-500/15"
+                                  : "bg-purple-500/10 text-purple-400 border-purple-500/15"
+                            }`}>
+                              {method === "dinheiro" ? "💵 Dinheiro" : method === "pix" ? "📱 Pix" : "💳 Cartão"}
                             </span>
-                          )}
-                          {(expense as any).isMonthlyBill && (
-                            <span 
-                              title="Origem: Planejamento / Gastos de Meta cadastrados na guia Metas"
-                              className="text-[9px] font-mono uppercase bg-sky-500/10 text-sky-400 px-1.5 py-0.5 rounded border border-sky-500/15 font-bold max-w-fit"
-                            >
-                              GASTO DE META
-                            </span>
-                          )}
-                        </div>
-                      </td>
+                            {expense.isSaleCost && (
+                              <span 
+                                title="Origem: Mapeamento Automático de Pedido / Venda"
+                                className="text-[9px] font-mono uppercase bg-amber-500/10 text-amber-500 px-1.5 py-0.5 rounded border border-amber-500/10 font-bold max-w-fit"
+                              >
+                                AUTOMÁTICO DEVENDAS
+                              </span>
+                            )}
+                            {(expense as any).isMonthlyBill && (
+                              <span 
+                                title="Origem: Planejamento / Gastos de Meta cadastrados na guia Metas"
+                                className="text-[9px] font-mono uppercase bg-sky-500/10 text-sky-400 px-1.5 py-0.5 rounded border border-sky-500/15 font-bold max-w-fit"
+                              >
+                                GASTO DE META
+                              </span>
+                            )}
+                          </div>
+                        </td>
                       <td className="p-2.5">
                         <span 
                           style={{ color: CATEGORY_COLORS[expense.category] || "#64748b" }}
@@ -1355,7 +1421,8 @@ export function ExpensesManager({ expenses, onAddExpense, onDeleteExpense, sales
                         )}
                       </td>
                     </tr>
-                  ))}
+                  );
+                })}
                 </tbody>
               </table>
             </div>

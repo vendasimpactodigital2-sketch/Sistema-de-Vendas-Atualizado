@@ -833,6 +833,7 @@ export function SalesHistory({
       netProfit: updatedNetProfit,
       date: updatedDate,
       deliveryDate: new Date().toISOString(), // Completed material withdrawal / delivery finalized today
+      materialEntregue: true,
       orderDate: originalOrderDate,
       payments: updatedPayments,
     };
