@@ -3674,25 +3674,39 @@ export default function App() {
     localStorage.removeItem("NUCLEO_CART_OPERATION_COST");
     localStorage.removeItem("NUCLEO_CART_CLIENT_MODE");
     localStorage.removeItem("NUCLEO_CART_COST_BREAKDOWN_ITEMS");
-    
+
+    // 2. Clear all local keys (including any Supabase client session keys)
+    const keysToRemove: string[] = [];
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (key.startsWith("sb-") || key.includes("supabase"))) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach((key) => localStorage.removeItem(key));
+    } catch (e) {
+      console.warn("localStorage keys removal failed:", e);
+    }
+
     try {
       sessionStorage.clear();
     } catch (e) {
       console.warn("sessionStorage.clear failed:", e);
     }
     
-    // 2. Clear current user state
+    // 3. Clear current user state
     setCurrentUser(null);
-
-    // 3. Perform Supabase sign out in the background (non-blocking)
+    
+    // 4. Perform Supabase sign out in the background (non-blocking) so iframe network limits never block redirection
     if (isSupabaseConfigured()) {
       dbSignOut().catch((err) => {
         console.error("Error signing out from Supabase:", err);
       });
     }
-    
-    // 4. Force complete reload to clear browser RAM state and redirect cleanly
-    window.location.href = "/";
+
+    // 5. Force complete reload to clear browser RAM state and redirect cleanly
+    window.location.replace("/");
   };
 
   // EXPLICIT FRONTEND SUBSCRIPTION WALL: If status is 'vencido', 'bloqueado' or 'expired', or email is 'pedro@gmail.com', force immediate return of the lock screen!

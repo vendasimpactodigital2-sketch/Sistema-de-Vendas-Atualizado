@@ -532,7 +532,11 @@ export function Header({
               {onLogout && (
                 <button
                   type="button"
-                  onClick={onLogout}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onLogout();
+                  }}
                   className="p-2 rounded-xl text-slate-400 hover:text-red-400 hover:bg-red-500/10 active:scale-95 transition-all cursor-pointer border border-transparent hover:border-red-500/20 shadow-sm"
                   title="Sair da Conta"
                 >
