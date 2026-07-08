@@ -59,6 +59,19 @@ export function CashRegisterModal({
 
   const isClosed = !cashRegister.currentSession;
 
+  const dailyMetaGoal = useMemo(() => {
+    try {
+      const savedBills = localStorage.getItem("NUCLEO_MONTHLY_BILLS");
+      const savedDays = localStorage.getItem("NUCLEO_MONTHLY_WORKDAYS");
+      const bills = savedBills ? JSON.parse(savedBills) : [];
+      const days = savedDays ? parseInt(savedDays, 10) : 26;
+      const totalBillsValue = bills.reduce((sum: number, b: any) => sum + (Number(b.value) || 0), 0);
+      return days > 0 ? totalBillsValue / days : 0;
+    } catch (e) {
+      return 0;
+    }
+  }, []);
+
   // Helper to check if a transaction date falls precisely inside the session time range
   const isDateInSession = (dateStr: string, session: any): boolean => {
     if (!session) return false;
@@ -480,6 +493,10 @@ export function CashRegisterModal({
                         <span>Motoboy:</span> 
                         <span className="text-slate-300">R$ {sessionStats.totalMotoboy.toFixed(2)}</span>
                       </div>
+                      <div className="flex justify-between border-t border-slate-900 pt-0.5 mt-0.5">
+                        <span className="text-rose-450 font-bold">Meta Diária:</span> 
+                        <strong className="text-rose-400">R$ {dailyMetaGoal.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                      </div>
                     </div>
                   </div>
 
@@ -523,20 +540,26 @@ export function CashRegisterModal({
                     </strong>
                   </div>
                   <div className="flex justify-between items-center text-[11px]">
-                    <span>(+) Recebimento em Dinheiro:</span>
+                    <span>(+) Recebimento Dinheiro (Entradas Totais):</span>
                     <strong className="text-emerald-400 font-mono">
-                      + R$ {sessionStats.cashInflow.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                      + R$ {sessionStats.totalEntradas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                     </strong>
                   </div>
                   <div className="flex justify-between items-center text-[11px]">
-                    <span>(-) Total Gasto em Despesas:</span>
+                    <span>(-) Total em Despesa (Custos):</span>
                     <strong className="text-rose-400 font-mono">
                       - R$ {sessionStats.totalCustos.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                     </strong>
                   </div>
+                  <div className="flex justify-between items-center text-[11px] font-bold border-t border-slate-900/60 pt-1 mt-1">
+                    <span className="text-emerald-400">(=) Dinheiro Lucro (Lucro Real):</span>
+                    <strong className="text-emerald-400 font-mono">
+                      R$ {sessionStats.lucroLiquido.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                    </strong>
+                  </div>
                   <div className="flex justify-between items-center pt-1.5 border-t border-slate-900 font-bold text-[11px]">
                     <span className="text-slate-300">Dinheiro Líquido Esperado na Gaveta:</span>
-                    <span className="text-brand-cyan font-mono text-xs bg-slate-900 px-1.5 py-0.5 rounded leading-none">
+                    <span className="text-brand-cyan font-mono text-xs bg-slate-900 px-1.5 py-0.5 rounded leading-none font-bold">
                       R$ {sessionStats.expectedInDrawer.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                     </span>
                   </div>
