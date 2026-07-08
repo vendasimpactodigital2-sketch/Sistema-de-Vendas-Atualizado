@@ -367,6 +367,307 @@ export function CashRegisterModal({
     setNotesInput("");
   };
 
+  const handlePrintSessionReport = () => {
+    const session = cashRegister.currentSession;
+    if (!session) return;
+
+    const sessionSalesList: any[] = [];
+    const sessionExpensesList: any[] = [];
+
+    // Helper to determine the method name in Portuguese and clean description
+    const parseExpenseDescription = (desc: string) => {
+      if (!desc) return { cleanDesc: "", method: "dinheiro" };
+      const trimmed = desc.trim();
+      if (trimmed.startsWith("[Dinheiro]")) {
+        return { cleanDesc: trimmed.replace("[Dinheiro]", "").trim(), method: "dinheiro" };
+      }
+      if (trimmed.startsWith("[Pix]")) {
+        return { cleanDesc: trimmed.replace("[Pix]", "").trim(), method: "pix" };
+      }
+      if (trimmed.startsWith("[Cartão]") || trimmed.startsWith("[Cartao]")) {
+        return { cleanDesc: trimmed.replace(/\[Cartã?o\]/, "").trim(), method: "cartão" };
+      }
+      
+      const lower = trimmed.toLowerCase();
+      if (lower.startsWith("[dinheiro]")) {
+        return { cleanDesc: trimmed.substring(10).trim(), method: "dinheiro" };
+      }
+      if (lower.startsWith("[pix]")) {
+        return { cleanDesc: trimmed.substring(5).trim(), method: "pix" };
+      }
+      if (lower.startsWith("[cartão]") || lower.startsWith("[cartao]")) {
+        return { cleanDesc: trimmed.replace(/\[cartã?o\]/i, "").trim(), method: "cartão" };
+      }
+
+      // Word matches:
+      if (lower.includes("dinheiro")) return { cleanDesc: trimmed, method: "dinheiro" };
+      if (lower.includes("pix")) return { cleanDesc: trimmed, method: "pix" };
+      if (lower.includes("cartão") || lower.includes("cartao")) return { cleanDesc: trimmed, method: "cartão" };
+
+      return { cleanDesc: trimmed, method: "dinheiro" };
+    };
+
+    sales.forEach((sale) => {
+      if (sale.isBudget) return;
+      
+      const orderDateStr = getSaleOrderDate(sale);
+      const isOrderToday = isDateInSession(orderDateStr, session);
+      
+      let paidOnThisDay = 0;
+      const methodsPaid: { [key: string]: number } = { dinheiro: 0, pix: 0, cartao: 0 };
+      
+      if (sale.payments && sale.payments.length > 0) {
+        sale.payments.forEach((payment) => {
+          if (isDateInSession(payment.date || sale.date, session)) {
+            const amt = Number(payment.amount) || 0;
+            paidOnThisDay += amt;
+            const method = String(payment.method || "dinheiro").toLowerCase();
+            if (method === "dinheiro") {
+              methodsPaid.dinheiro += amt;
+            } else if (method === "pix") {
+              methodsPaid.pix += amt;
+            } else {
+              methodsPaid.cartao += amt;
+            }
+          }
+        });
+      } else {
+        if (isDateInSession(sale.date, session)) {
+          const amt = sale.balanceDue === 0 ? sale.totalValue : (sale.downPayment || 0);
+          paidOnThisDay += amt;
+          const method = String(sale.paymentMethod || "dinheiro").toLowerCase();
+          if (method === "dinheiro") {
+            methodsPaid.dinheiro += amt;
+          } else if (method === "pix") {
+            methodsPaid.pix += amt;
+          } else {
+            methodsPaid.cartao += amt;
+          }
+        }
+      }
+      
+      if (paidOnThisDay > 0 || isOrderToday) {
+        sessionSalesList.push({
+          id: sale.id,
+          clientName: sale.clientName,
+          totalValue: sale.totalValue,
+          paidAmount: paidOnThisDay,
+          methodsPaid,
+          cost: isOrderToday ? (getSaleOperationCost(sale) + (sale.useMotoboy ? (sale.motoboyCost || 0) : 0)) : 0,
+          isOrderToday,
+        });
+      }
+    });
+
+    expenses.forEach((expense) => {
+      if (!expense.date) return;
+      if (isDateInSession(expense.date, session)) {
+        const { cleanDesc, method } = parseExpenseDescription(expense.description);
+        sessionExpensesList.push({
+          ...expense,
+          cleanDesc,
+          method
+        });
+      }
+    });
+
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) return;
+
+    const formatCurrency = (val: number) => {
+      return new Intl.NumberFormat("pt-BR", {
+        style: "currency",
+        currency: "BRL",
+      }).format(val);
+    };
+
+    const formattedOpenDate = new Date(session.dataAbertura).toLocaleDateString("pt-BR");
+    const formattedOpenTime = new Date(session.dataAbertura).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+
+    const salesHtml = sessionSalesList.map((s: any) => `
+      <tr>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 12px;">${s.id.substring(0, 8)}</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 12px; font-weight: bold;">
+          ${s.clientName}
+          ${!s.isOrderToday ? '<span style="font-size: 8px; background-color: #f1f5f9; color: #475569; padding: 1px 4px; border-radius: 4px; margin-left: 5px; font-weight: normal;">BAIXA</span>' : ''}
+        </td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 12px; text-align: right;">${formatCurrency(s.totalValue)}</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 12px; text-align: right; font-weight: bold; color: #16a34a;">${formatCurrency(s.paidAmount)}</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 12px; text-align: right;">${formatCurrency(s.cost)}</td>
+      </tr>
+    `).join("");
+
+    const expensesHtml = sessionExpensesList.map((e: any) => `
+      <tr>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 12px;">${e.cleanDesc || e.description}</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 12px; text-transform: uppercase; font-weight: bold; color: #64748b;">[${e.method}]</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 12px; text-align: right; font-weight: bold; color: #dc2626;">-${formatCurrency(e.value)}</td>
+      </tr>
+    `).join("");
+
+    const observedValue = Number(observedCashInput) || 0;
+    const isReconciled = observedCashInput !== "";
+    const diff = observedValue - sessionStats.expectedInDrawer;
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Relatório de Fechamento de Caixa - Operador: ${session.operador}</title>
+          <style>
+            body { font-family: system-ui, -apple-system, sans-serif; color: #1e293b; padding: 25px; line-height: 1.4; }
+            .header { text-align: center; margin-bottom: 25px; border-bottom: 2px solid #0f172a; padding-bottom: 12px; }
+            .title { font-size: 22px; font-weight: 800; color: #0f172a; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+            .subtitle { font-size: 12px; color: #64748b; font-weight: 500; }
+            .meta-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; margin-bottom: 20px; font-size: 12px; }
+            .meta-box { padding: 10px 12px; border: 1px solid #e2e8f0; border-radius: 8px; background-color: #f8fafc; }
+            .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 25px; }
+            .summary-card { padding: 12px; border: 1px solid #e2e8f0; border-radius: 10px; background-color: #f8fafc; }
+            .summary-card .label { font-size: 9px; text-transform: uppercase; color: #64748b; font-weight: 800; letter-spacing: 0.5px; }
+            .summary-card .value { font-size: 16px; font-weight: 800; margin-top: 4px; color: #0f172a; }
+            .section-title { font-size: 13px; font-weight: 800; margin: 25px 0 10px 0; border-bottom: 2px solid #e2e8f0; padding-bottom: 4px; color: #1e293b; text-transform: uppercase; letter-spacing: 0.5px; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+            th, td { padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align: left; font-size: 12px; }
+            th { background-color: #f1f5f9; font-weight: bold; color: #475569; text-transform: uppercase; font-size: 9px; letter-spacing: 0.5px; }
+            .text-right { text-align: right; }
+            .profit-positive { color: #16a34a; }
+            .profit-negative { color: #dc2626; }
+            .diff-positive { color: #2563eb; font-weight: bold; }
+            .diff-negative { color: #dc2626; font-weight: bold; }
+            .diff-perfect { color: #16a34a; font-weight: bold; }
+            .breakdown { font-size: 10px; color: #64748b; margin-top: 4px; border-top: 1px dashed #e2e8f0; padding-top: 4px; }
+            .breakdown-row { display: flex; justify-content: space-between; margin-bottom: 2px; }
+            .print-btn-container { text-align: center; margin-top: 30px; }
+            .print-btn { padding: 10px 20px; font-size: 13px; font-weight: bold; background-color: #0284c7; color: white; border: none; border-radius: 6px; cursor: pointer; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); transition: all 0.2s; }
+            .print-btn:hover { background-color: #0369a1; }
+            @media print {
+              body { padding: 5px; }
+              .print-btn-container { display: none; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div class="title">Relatório de Fechamento de Caixa</div>
+            <div class="subtitle">Controle de Turno e Conciliação Financeira</div>
+          </div>
+
+          <div class="meta-grid">
+            <div class="meta-box">
+              <b>Informações do Turno:</b><br/>
+              Operador: <b>${session.operador}</b><br/>
+              Abertura: <b>${formattedOpenDate} às ${formattedOpenTime}</b><br/>
+              Troco Inicial: <b>${formatCurrency(session.valorAbertura)}</b>
+            </div>
+            <div class="meta-box">
+              <b>Emissão do Relatório:</b><br/>
+              Data: <b>${new Date().toLocaleDateString("pt-BR")} às ${new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}</b><br/>
+              Status: <b>Ativo / Em Fechamento</b>
+            </div>
+          </div>
+          
+          <div class="summary-grid">
+            <div class="summary-card">
+              <div class="label">Total Entradas</div>
+              <div class="value" style="color: #16a34a;">${formatCurrency(sessionStats.totalEntradas)}</div>
+              <div class="breakdown">
+                <div class="breakdown-row"><span>Dinheiro:</span> <span>${formatCurrency(sessionStats.cashInflow)}</span></div>
+                <div class="breakdown-row"><span>Pix:</span> <span>${formatCurrency(sessionStats.pixInflow)}</span></div>
+                <div class="breakdown-row"><span>Cartão:</span> <span>${formatCurrency(sessionStats.cardInflow)}</span></div>
+              </div>
+            </div>
+            <div class="summary-card">
+              <div class="label">Total Custos/Despesas</div>
+              <div class="value" style="color: #475569;">${formatCurrency(sessionStats.totalCustos)}</div>
+              <div class="breakdown">
+                <div class="breakdown-row"><span>Custos Vendas:</span> <span>${formatCurrency(sessionStats.operationCosts)}</span></div>
+                <div class="breakdown-row"><span>Despesas:</span> <span>${formatCurrency(sessionStats.expensesTotal)}</span></div>
+                <div class="breakdown-row"><span>Motoboy:</span> <span>${formatCurrency(sessionStats.totalMotoboy)}</span></div>
+              </div>
+            </div>
+            <div class="summary-card">
+              <div class="label">Esperado em Dinheiro</div>
+              <div class="value" style="color: #0284c7;">${formatCurrency(sessionStats.expectedInDrawer)}</div>
+              <div class="breakdown" style="font-size: 8px;">
+                Fundo Inicial + Entradas Dinheiro - Despesas Dinheiro
+              </div>
+            </div>
+            <div class="summary-card">
+              <div class="label">Lucro Líquido Turno</div>
+              <div class="value ${sessionStats.lucroLiquido >= 0 ? 'profit-positive' : 'profit-negative'}">${formatCurrency(sessionStats.lucroLiquido)}</div>
+              <div class="breakdown">
+                Entradas totais subtraindo custos operacionais globais
+              </div>
+            </div>
+          </div>
+
+          ${isReconciled ? `
+            <div style="margin-bottom: 25px; padding: 15px; border: 1px solid #cbd5e1; border-radius: 10px; background-color: #f1f5f9;">
+              <h3 style="margin: 0 0 8px 0; font-size: 13px; text-transform: uppercase; color: #1e293b;">Conciliação Física de Gaveta</h3>
+              <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;">
+                <span>Valor Contado na Gaveta:</span>
+                <b>${formatCurrency(observedValue)}</b>
+              </div>
+              <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;">
+                <span>Valor Esperado em Dinheiro:</span>
+                <span>${formatCurrency(sessionStats.expectedInDrawer)}</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; font-size: 12px; border-top: 1px dashed #cbd5e1; padding-top: 6px; margin-top: 6px;">
+                <span>Diferença de Caixa (Quebra):</span>
+                <span class="${diff === 0 ? 'diff-perfect' : diff > 0 ? 'diff-positive' : 'diff-negative'}">
+                  ${diff === 0 ? 'CONCILADO COM SUCESSO (R$ 0,00)' : diff > 0 ? `SOBRA DE ${formatCurrency(diff)}` : `FALTA DE ${formatCurrency(Math.abs(diff))}`}
+                </span>
+              </div>
+              ${notesInput.trim() ? `
+                <div style="margin-top: 8px; font-size: 11px; color: #475569; font-style: italic; background-color: white; padding: 8px; border-radius: 6px; border: 1px solid #e2e8f0;">
+                  <b>Observações do Operador:</b><br/>${notesInput}
+                </div>
+              ` : ''}
+            </div>
+          ` : ''}
+          
+          <div class="section-title">Histórico de Transações (Vendas e Recebimentos)</div>
+          ${sessionSalesList.length > 0 ? `
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 80px;">Pedido</th>
+                  <th>Cliente</th>
+                  <th class="text-right">Total Pedido</th>
+                  <th class="text-right">Valor Pago (Hoje)</th>
+                  <th class="text-right">Custos Diretos</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${salesHtml}
+              </tbody>
+            </table>
+          ` : `<p style="font-size: 12px; color: #64748b; font-style: italic; text-align: center; padding: 15px; border: 1px dashed #cbd5e1; border-radius: 6px;">Nenhuma transação de venda registrada neste turno.</p>`}
+          
+          <div class="section-title">Histórico de Despesas Standalone</div>
+          ${sessionExpensesList.length > 0 ? `
+            <table>
+              <thead>
+                <tr>
+                  <th>Descrição da Despesa</th>
+                  <th style="width: 120px;">Canal de Saída</th>
+                  <th class="text-right" style="width: 100px;">Valor</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${expensesHtml}
+              </tbody>
+            </table>
+          ` : `<p style="font-size: 12px; color: #64748b; font-style: italic; text-align: center; padding: 15px; border: 1px dashed #cbd5e1; border-radius: 6px;">Nenhuma despesa standalone registrada neste turno.</p>`}
+          
+          <div class="print-btn-container">
+            <button class="print-btn" onclick="window.print()">Imprimir este Relatório</button>
+          </div>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+  };
+
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-2 bg-slate-950/85 backdrop-blur-sm overflow-y-auto animate-fade-in font-sans">
       <div 
