@@ -123,7 +123,11 @@ export function MetricsCards({
     }, 0);
 
   // 4. Custos Operacionais do período (standalone expenses + custos diretos de vendas do período + motoboy)
-  const expensesInPeriod = expenses.filter((e) => isDateInPeriod(e.date));
+  const expensesInPeriod = expenses.filter((e) => {
+    const isInPeriod = isDateInPeriod(e.date);
+    const isWithdrawal = e.description && /retirada|sangria/i.test(e.description);
+    return isInPeriod && !isWithdrawal;
+  });
   const totalStandaloneExpenses = expensesInPeriod.reduce((sum, exp) => sum + exp.value, 0);
   const totalSaleOperationCost = sales
     .filter((s) => !s.isBudget)

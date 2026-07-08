@@ -8,6 +8,7 @@ import {
   ChevronLeft, 
   ChevronRight, 
   TrendingUp, 
+  TrendingDown,
   BarChart2, 
   RefreshCcw, 
   Target, 
@@ -28,7 +29,7 @@ import {
   LineChart,
   Line
 } from "recharts";
-import { Sale, Expense } from "../types";
+import { Sale, Expense, getSaleOrderDate, getSaleOperationCost } from "../types";
 
 interface WeeklyGoalModalProps {
   isOpen: boolean;
@@ -65,25 +66,6 @@ function getLocalDateFromISO(isoString: string): string {
   }
 }
 
-function getSaleOrderDate(sale: Sale): string {
-  if (sale.clientPhone && sale.clientPhone.includes("::")) {
-    try {
-      const parts = sale.clientPhone.split("::");
-      const meta = JSON.parse(parts[1]);
-      if (meta.orderDate) return meta.orderDate;
-    } catch {
-      // ignore
-    }
-  }
-  return sale.date || new Date().toISOString();
-}
-
-function getSaleOperationCost(sale: Sale): number {
-  if (sale.costItems && sale.costItems.length > 0) {
-    return sale.costItems.reduce((sum, item) => sum + item.value, 0);
-  }
-  return sale.operationCost || 0;
-}
 
 const WEEKDAYS_PT = [
   "Domingo",
@@ -157,6 +139,208 @@ export function WeeklyGoalModal({
   const [selectedWeekdayConfig, setSelectedWeekdayConfig] = useState<number>(() => {
     return new Date().getDay(); // defaults to today's weekday
   });
+
+  const [selectedDayDetails, setSelectedDayDetails] = useState<any | null>(null);
+
+  const printReport = (dateStr: string, dayData: any) => {
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) return;
+    
+    const formatCurrency = (val: number) => {
+      return new Intl.NumberFormat("pt-BR", {
+        style: "currency",
+        currency: "BRL",
+      }).format(val);
+    };
+    
+    const formattedDate = dateStr.split("-").reverse().join("/");
+    
+    const salesHtml = dayData.salesList.map((s: any) => `
+      <tr>
+        <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-size: 13px;">${s.id.substring(0, 8)}</td>
+        <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-size: 13px; font-weight: bold;">${s.clientName}</td>
+        <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-size: 13px; text-align: right;">${formatCurrency(s.totalValue)}</td>
+        <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-size: 13px; text-align: right; font-weight: bold; color: #16a34a;">${formatCurrency(s.paidAmount)}</td>
+        <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-size: 13px; text-align: right;">${formatCurrency(s.cost)}</td>
+      </tr>
+    `).join("");
+    
+    const expensesHtml = dayData.expensesList.map((e: any) => `
+      <tr>
+        <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-size: 13px;">${e.description}</td>
+        <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-size: 13px;">${e.category || "Geral"}</td>
+        <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-size: 13px; text-align: right; font-weight: bold; color: #dc2626;">-${formatCurrency(e.value)}</td>
+      </tr>
+    `).join("");
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Relatório de Vendas - ${formattedDate}</title>
+          <style>
+            body { font-family: system-ui, -apple-system, sans-serif; color: #1e293b; padding: 30px; line-height: 1.5; }
+            .header { text-align: center; margin-bottom: 35px; border-bottom: 2px solid #0284c7; padding-bottom: 15px; }
+            .title { font-size: 26px; font-weight: 800; color: #0f172a; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.5px; }
+            .subtitle { font-size: 13px; color: #64748b; font-weight: 500; }
+            .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 35px; }
+            .summary-card { padding: 15px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #f8fafc; }
+            .summary-card .label { font-size: 10px; text-transform: uppercase; color: #64748b; font-weight: 800; letter-spacing: 0.5px; }
+            .summary-card .value { font-size: 18px; font-weight: 800; margin-top: 6px; color: #0f172a; }
+            .section-title { font-size: 15px; font-weight: 800; margin: 35px 0 12px 0; border-bottom: 2px solid #e2e8f0; padding-bottom: 6px; color: #1e293b; text-transform: uppercase; letter-spacing: 0.5px; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 25px; }
+            th, td { padding: 12px 10px; border-bottom: 1px solid #e2e8f0; text-align: left; font-size: 13px; }
+            th { background-color: #f1f5f9; font-weight: bold; color: #475569; text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px; }
+            .text-right { text-align: right; }
+            .profit-positive { color: #16a34a; }
+            .profit-negative { color: #dc2626; }
+            .print-btn-container { text-align: center; margin-top: 40px; }
+            .print-btn { padding: 12px 24px; font-size: 14px; font-weight: bold; background-color: #0284c7; color: white; border: none; border-radius: 8px; cursor: pointer; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); transition: all 0.2s; }
+            .print-btn:hover { background-color: #0369a1; }
+            @media print {
+              body { padding: 10px; }
+              .print-btn-container { display: none; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div class="title">Relatório Diário de Vendas e Caixa</div>
+            <div class="subtitle">Dia do Fluxo: <b>${formattedDate}</b> &nbsp;|&nbsp; Gerado em: ${new Date().toLocaleDateString("pt-BR")} às ${new Date().toLocaleTimeString("pt-BR")}</div>
+          </div>
+          
+          <div class="summary-grid">
+            <div class="summary-card">
+              <div class="label">Entradas (Caixa)</div>
+              <div class="value" style="color: #16a34a;">${formatCurrency(dayData.realPaymentsReceived)}</div>
+            </div>
+            <div class="summary-card">
+              <div class="label">Custos Operacionais</div>
+              <div class="value" style="color: #475569;">${formatCurrency(dayData.daySaleOperationCost + dayData.dayMotoboyCost)}</div>
+            </div>
+            <div class="summary-card">
+              <div class="label">Despesas Standalone</div>
+              <div class="value" style="color: #dc2626;">${formatCurrency(dayData.dayExpenses)}</div>
+            </div>
+            <div class="summary-card">
+              <div class="label">Lucro Líquido Real</div>
+              <div class="value ${dayData.netProfit >= 0 ? 'profit-positive' : 'profit-negative'}">${formatCurrency(dayData.netProfit)}</div>
+            </div>
+          </div>
+          
+          <div class="section-title">Vendas & Recebimentos do Dia</div>
+          ${dayData.salesList.length > 0 ? `
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 100px;">Pedido</th>
+                  <th>Cliente</th>
+                  <th class="text-right">Valor Total</th>
+                  <th class="text-right">Valor Pago (Hoje)</th>
+                  <th class="text-right">Custos Diretos</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${salesHtml}
+              </tbody>
+            </table>
+          ` : `<p style="font-size: 13px; color: #64748b; font-style: italic; text-align: center; padding: 20px; border: 1px dashed #cbd5e1; border-radius: 8px;">Nenhuma venda ou recebimento registrado neste dia.</p>`}
+          
+          <div class="section-title">Despesas do Dia</div>
+          ${dayData.expensesList.length > 0 ? `
+            <table>
+              <thead>
+                <tr>
+                  <th>Descrição</th>
+                  <th>Categoria</th>
+                  <th class="text-right">Valor</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${expensesHtml}
+              </tbody>
+            </table>
+          ` : `<p style="font-size: 13px; color: #64748b; font-style: italic; text-align: center; padding: 20px; border: 1px dashed #cbd5e1; border-radius: 8px;">Nenhuma despesa registrada neste dia.</p>`}
+          
+          <div class="print-btn-container">
+            <button class="print-btn" onclick="window.print()">Imprimir este Relatório</button>
+          </div>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+  };
+
+  const handleDayClick = (dateStr: string) => {
+    const daySalesList: any[] = [];
+    let realPaymentsReceived = 0;
+    
+    sales.forEach(sale => {
+      if (sale.isBudget) return;
+      
+      let paidOnThisDay = 0;
+      if (sale.payments && sale.payments.length > 0) {
+        sale.payments.forEach(payment => {
+          if (getLocalDateFromISO(payment.date) === dateStr) {
+            paidOnThisDay += payment.amount;
+          }
+        });
+      } else {
+        if (sale.downPayment > 0 && getLocalDateFromISO(sale.date) === dateStr) {
+          paidOnThisDay += sale.downPayment;
+        }
+      }
+      
+      const orderDate = getSaleOrderDate(sale);
+      const isOrderToday = getLocalDateFromISO(orderDate) === dateStr;
+      
+      if (paidOnThisDay > 0 || isOrderToday) {
+        realPaymentsReceived += paidOnThisDay;
+        daySalesList.push({
+          id: sale.id,
+          clientName: sale.clientName,
+          totalValue: sale.totalValue,
+          paidAmount: paidOnThisDay,
+          cost: isOrderToday ? (getSaleOperationCost(sale) + (sale.useMotoboy ? (sale.motoboyCost || 0) : 0)) : 0,
+          isOrderToday,
+          useMotoboy: sale.useMotoboy && isOrderToday,
+          motoboyCost: sale.useMotoboy && isOrderToday ? (sale.motoboyCost || 0) : 0
+        });
+      }
+    });
+
+    let daySaleOperationCost = 0;
+    let dayMotoboyCost = 0;
+    sales.forEach(sale => {
+      if (sale.isBudget) return;
+      if (getLocalDateFromISO(getSaleOrderDate(sale)) === dateStr) {
+        daySaleOperationCost += getSaleOperationCost(sale);
+        if (sale.useMotoboy) {
+          dayMotoboyCost += sale.motoboyCost || 0;
+        }
+      }
+    });
+
+    const dayExpensesList = expenses.filter(e => {
+      const isTargetDate = e.date && getLocalDateFromISO(e.date) === dateStr;
+      const isWithdrawal = e.description && /retirada|sangria/i.test(e.description);
+      return isTargetDate && !isWithdrawal;
+    });
+    const dayExpensesValue = dayExpensesList.reduce((sum, e) => sum + e.value, 0);
+
+    const netProfit = realPaymentsReceived - (daySaleOperationCost + dayExpensesValue + dayMotoboyCost);
+
+    setSelectedDayDetails({
+      dateStr,
+      realPaymentsReceived,
+      daySaleOperationCost,
+      dayMotoboyCost,
+      dayExpenses: dayExpensesValue,
+      netProfit,
+      salesList: daySalesList,
+      expensesList: dayExpensesList
+    });
+  };
+
 
   // Status filtering: "all" | "met" | "missed"
   const [filterStatus, setFilterStatus] = useState<"all" | "met" | "missed">("all");
@@ -271,33 +455,54 @@ export function WeeklyGoalModal({
       const day = String(dateObj.getDate()).padStart(2, '0');
       const dateStr = `${year}-${month}-${day}`;
 
-      let salesProfit = 0;
-      let salesCount = 0;
+      let realPaymentsReceived = 0;
+      sales.forEach(sale => {
+        if (sale.isBudget) return;
+        if (sale.payments && sale.payments.length > 0) {
+          sale.payments.forEach(payment => {
+            if (getLocalDateFromISO(payment.date) === dateStr) {
+              realPaymentsReceived += payment.amount;
+            }
+          });
+        } else {
+          if (sale.downPayment > 0 && getLocalDateFromISO(sale.date) === dateStr) {
+            realPaymentsReceived += sale.downPayment;
+          }
+        }
+      });
+
+      let daySaleOperationCost = 0;
+      let dayMotoboyCost = 0;
       let faturamento = 0;
+      let salesCount = 0;
       
       sales.forEach((sale) => {
         if (sale.isBudget) return;
         const oDate = getSaleOrderDate(sale);
         const lDate = getLocalDateFromISO(oDate);
         if (lDate === dateStr) {
-          const cost = getSaleOperationCost(sale);
-          const motoboy = sale.useMotoboy ? (sale.motoboyCost || 0) : 0;
-          const profit = typeof sale.netProfit === 'number' ? sale.netProfit : (sale.totalValue - cost - motoboy);
-          salesProfit += profit;
-          salesCount++;
+          daySaleOperationCost += getSaleOperationCost(sale);
+          if (sale.useMotoboy) {
+            dayMotoboyCost += sale.motoboyCost || 0;
+          }
           faturamento += sale.totalValue;
+          salesCount++;
         }
       });
 
       const dayExpenses = expenses
-        .filter((e) => e.date && getLocalDateFromISO(e.date) === dateStr)
+        .filter((e) => {
+          const isTargetDate = e.date && getLocalDateFromISO(e.date) === dateStr;
+          const isWithdrawal = e.description && /retirada|sangria/i.test(e.description);
+          return isTargetDate && !isWithdrawal;
+        })
         .reduce((sum, e) => sum + e.value, 0);
 
-      const netProfit = salesProfit - dayExpenses;
+      const netProfit = realPaymentsReceived - (daySaleOperationCost + dayExpenses + dayMotoboyCost);
       const dayOfWeek = dateObj.getDay();
       const weekdayGoal = activeWeekdayGoals[dayOfWeek] !== undefined ? activeWeekdayGoals[dayOfWeek] : dailyMetaGoal;
       const isMet = netProfit >= weekdayGoal;
-      const hasSalesOrExpenses = salesCount > 0 || dayExpenses > 0;
+      const hasSalesOrExpenses = salesCount > 0 || dayExpenses > 0 || realPaymentsReceived > 0;
 
       // format labels
       const weekdayName = WEEKDAYS_PT[dateObj.getDay()];
@@ -352,33 +557,54 @@ export function WeeklyGoalModal({
       const dayStr = String(nextDay.getDate()).padStart(2, '0');
       const dateStr = `${year}-${month}-${dayStr}`;
 
-      let salesProfit = 0;
-      let salesCount = 0;
+      let realPaymentsReceived = 0;
+      sales.forEach(sale => {
+        if (sale.isBudget) return;
+        if (sale.payments && sale.payments.length > 0) {
+          sale.payments.forEach(payment => {
+            if (getLocalDateFromISO(payment.date) === dateStr) {
+              realPaymentsReceived += payment.amount;
+            }
+          });
+        } else {
+          if (sale.downPayment > 0 && getLocalDateFromISO(sale.date) === dateStr) {
+            realPaymentsReceived += sale.downPayment;
+          }
+        }
+      });
+
+      let daySaleOperationCost = 0;
+      let dayMotoboyCost = 0;
       let faturamento = 0;
+      let salesCount = 0;
       
       sales.forEach((sale) => {
         if (sale.isBudget) return;
         const oDate = getSaleOrderDate(sale);
         const lDate = getLocalDateFromISO(oDate);
         if (lDate === dateStr) {
-          const cost = getSaleOperationCost(sale);
-          const motoboy = sale.useMotoboy ? (sale.motoboyCost || 0) : 0;
-          const profit = typeof sale.netProfit === 'number' ? sale.netProfit : (sale.totalValue - cost - motoboy);
-          salesProfit += profit;
-          salesCount++;
+          daySaleOperationCost += getSaleOperationCost(sale);
+          if (sale.useMotoboy) {
+            dayMotoboyCost += sale.motoboyCost || 0;
+          }
           faturamento += sale.totalValue;
+          salesCount++;
         }
       });
 
       const dayExpenses = expenses
-        .filter((e) => e.date && getLocalDateFromISO(e.date) === dateStr)
+        .filter((e) => {
+          const isTargetDate = e.date && getLocalDateFromISO(e.date) === dateStr;
+          const isWithdrawal = e.description && /retirada|sangria/i.test(e.description);
+          return isTargetDate && !isWithdrawal;
+        })
         .reduce((sum, e) => sum + e.value, 0);
 
-      const netProfit = salesProfit - dayExpenses;
+      const netProfit = realPaymentsReceived - (daySaleOperationCost + dayExpenses + dayMotoboyCost);
       const dayOfWeek = nextDay.getDay();
       const weekdayGoal = activeWeekdayGoals[dayOfWeek] !== undefined ? activeWeekdayGoals[dayOfWeek] : dailyMetaGoal;
       const isMet = weekdayGoal > 0 && netProfit >= weekdayGoal;
-      const hasSalesOrExpenses = salesCount > 0 || dayExpenses > 0;
+      const hasSalesOrExpenses = salesCount > 0 || dayExpenses > 0 || realPaymentsReceived > 0;
 
       const weekdayShort = WEEKDAYS_SHORT[nextDay.getDay()];
       const dateLabel = `${dayStr}/${month}`;
@@ -823,22 +1049,25 @@ export function WeeklyGoalModal({
               {weeklyPerformanceDays.map((day) => {
                 const isToday = new Date().toISOString().split("T")[0] === day.dateStr;
                 return (
-                  <div
+                  <button
                     key={day.dateStr}
-                    className={`relative p-3 rounded-xl border flex flex-col justify-between transition-all duration-300 ${
+                    type="button"
+                    onClick={() => handleDayClick(day.dateStr)}
+                    className={`relative p-3 rounded-xl border flex flex-col justify-between text-left transition-all duration-300 cursor-pointer hover:scale-[1.04] active:scale-[0.96] hover:shadow-[0_0_15px_rgba(34,211,238,0.12)] group ${
                       day.isMet
                         ? "bg-emerald-500/5 border-emerald-500/30 hover:border-emerald-500/55 shadow-[0_0_12px_rgba(16,185,129,0.06)]"
                         : day.hasSalesOrExpenses
                         ? "bg-rose-500/5 border-rose-500/30 hover:border-rose-500/55 shadow-[0_0_12px_rgba(239,68,68,0.06)]"
                         : "bg-slate-900/40 border-slate-850 hover:border-slate-750"
                     } ${isToday ? "ring-2 ring-brand-cyan/50" : ""}`}
+                    title="Clique para ver o relatório completo de vendas e despesas"
                   >
-                    <div className="flex items-center justify-between gap-1.5">
+                    <div className="flex items-center justify-between gap-1.5 w-full">
                       <span className="text-[10px] font-mono font-black text-slate-300 uppercase">{day.weekdayShort}</span>
                       <span className="text-[9px] font-mono font-semibold text-slate-400">{day.dateLabel}</span>
                     </div>
 
-                    <div className="mt-3 flex items-center justify-between">
+                    <div className="mt-3 flex items-center justify-between w-full">
                       {day.isMet ? (
                         <span className="flex items-center gap-1 text-[9.5px] font-black text-emerald-450 uppercase">
                           <CheckCircle className="h-3.5 w-3.5 text-emerald-400" />
@@ -854,12 +1083,13 @@ export function WeeklyGoalModal({
                       )}
                     </div>
                     
-                    <div className="mt-2 text-right">
+                    <div className="mt-2 text-right w-full flex items-center justify-between">
+                      <span className="text-[7.5px] font-mono text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity">Ver Relatório ➜</span>
                       <p className="text-[11px] font-mono font-black text-slate-100">
                         R$ {day.netProfit.toLocaleString("pt-BR", { maximumFractionDigits: 0 })}
                       </p>
                     </div>
-                  </div>
+                  </button>
                 );
               })}
             </div>
@@ -1195,13 +1425,16 @@ export function WeeklyGoalModal({
                       const isToday = new Date().toISOString().split("T")[0] === d.dateStr;
 
                       return (
-                        <div 
-                          key={d.dateStr} 
-                          className={`p-3 rounded-2xl border flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3.5 transition-all ${
+                        <button 
+                          key={d.dateStr}
+                          type="button"
+                          onClick={() => handleDayClick(d.dateStr)}
+                          className={`w-full p-3 rounded-2xl border flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3.5 text-left transition-all cursor-pointer hover:scale-[1.015] hover:bg-slate-950/80 active:scale-[0.985] group ${
                             isToday 
                               ? "bg-slate-950 border-brand-cyan/40 shadow-[0_0_12.5px_rgba(34,211,238,0.08)]" 
                               : "bg-slate-950/40 border-slate-850 hover:bg-slate-950/70"
                           }`}
+                          title="Clique para ver o relatório completo de vendas e despesas"
                         >
                           {/* Left stats */}
                           <div className="flex items-start gap-3">
@@ -1277,7 +1510,7 @@ export function WeeklyGoalModal({
                               )}
                             </div>
                           </div>
-                        </div>
+                        </button>
                       );
                     })}
                   </div>
@@ -1302,6 +1535,169 @@ export function WeeklyGoalModal({
             Fechar Janela
           </button>
         </div>
+
+        {/* Day Details Report Modal Overlay */}
+        {selectedDayDetails && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 backdrop-blur-md p-4 animate-fade-in">
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+              {/* Header */}
+              <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/50">
+                <div>
+                  <h3 className="text-sm font-black text-slate-100 uppercase tracking-wider font-mono">
+                    Relatório de Vendas e Caixa Diário
+                  </h3>
+                  <p className="text-xs text-brand-cyan font-mono font-bold mt-0.5">
+                    Data: {selectedDayDetails.dateStr.split("-").reverse().join("/")}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedDayDetails(null)}
+                  className="text-slate-400 hover:text-slate-100 p-1.5 rounded-xl bg-slate-850 hover:bg-slate-800 cursor-pointer transition-all"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {/* Content - Scrollable */}
+              <div className="p-5 overflow-y-auto space-y-5">
+                {/* Stats Grid */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  <div className="p-3 bg-slate-950/40 rounded-xl border border-slate-850">
+                    <span className="text-[8px] uppercase font-bold text-slate-500 font-mono">Entradas (Caixa)</span>
+                    <p className="text-sm font-extrabold font-mono text-emerald-450 mt-0.5">
+                      R$ {selectedDayDetails.realPaymentsReceived.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                  <div className="p-3 bg-slate-950/40 rounded-xl border border-slate-850">
+                    <span className="text-[8px] uppercase font-bold text-slate-500 font-mono">Custos Venda</span>
+                    <p className="text-sm font-extrabold font-mono text-slate-350 mt-0.5">
+                      R$ {(selectedDayDetails.daySaleOperationCost + selectedDayDetails.dayMotoboyCost).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                  <div className="p-3 bg-slate-950/40 rounded-xl border border-slate-850">
+                    <span className="text-[8px] uppercase font-bold text-slate-500 font-mono">Despesas</span>
+                    <p className="text-sm font-extrabold font-mono text-rose-450 mt-0.5">
+                      R$ {selectedDayDetails.dayExpenses.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                  <div className="p-3 bg-slate-950/40 rounded-xl border border-slate-850">
+                    <span className="text-[8px] uppercase font-bold text-slate-500 font-mono">Lucro Líquido</span>
+                    <p className={`text-sm font-extrabold font-mono mt-0.5 ${selectedDayDetails.netProfit >= 0 ? "text-emerald-450" : "text-rose-455"}`}>
+                      R$ {selectedDayDetails.netProfit.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Sales list */}
+                <div className="space-y-2">
+                  <h4 className="text-[10px] font-black text-slate-300 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                    <DollarSign className="h-3.5 w-3.5 text-emerald-450" />
+                    <span>Pedidos e Recebimentos do Dia ({selectedDayDetails.salesList.length})</span>
+                  </h4>
+                  {selectedDayDetails.salesList.length > 0 ? (
+                    <div className="border border-slate-850 rounded-xl overflow-hidden bg-slate-950/15 max-h-48 overflow-y-auto">
+                      <table className="w-full text-left text-[11px]">
+                        <thead className="bg-slate-950/70 text-slate-400 uppercase font-mono text-[8px] border-b border-slate-850 sticky top-0">
+                          <tr>
+                            <th className="p-2.5 font-bold">Cliente</th>
+                            <th className="p-2.5 font-bold text-right">Total Pedido</th>
+                            <th className="p-2.5 font-bold text-right text-emerald-450">Valor Pago (Hoje)</th>
+                            <th className="p-2.5 font-bold text-right">Custos</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-850/50">
+                          {selectedDayDetails.salesList.map((s: any, idx: number) => (
+                            <tr key={idx} className="hover:bg-slate-900/30">
+                              <td className="p-2.5 font-bold text-slate-200">
+                                {s.clientName}
+                                {!s.isOrderToday && (
+                                  <span className="ml-1 text-[7px] bg-slate-800 text-slate-400 px-1 py-[0.5px] rounded font-mono font-normal">
+                                    BAIXA
+                                  </span>
+                                )}
+                              </td>
+                              <td className="p-2.5 font-mono text-right text-slate-400">
+                                R$ {s.totalValue.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                              </td>
+                              <td className="p-2.5 font-mono text-right font-bold text-emerald-450">
+                                R$ {s.paidAmount.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                              </td>
+                              <td className="p-2.5 font-mono text-right text-slate-455">
+                                R$ {s.cost.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="p-5 text-center border border-dashed border-slate-800 rounded-xl bg-slate-950/5">
+                      <p className="text-[10px] text-slate-500 font-medium font-mono">Nenhuma venda/pagamento registrado.</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Expenses list */}
+                <div className="space-y-2">
+                  <h4 className="text-[10px] font-black text-slate-300 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                    <TrendingDown className="h-3.5 w-3.5 text-rose-455" />
+                    <span>Despesas Gerais ({selectedDayDetails.expensesList.length})</span>
+                  </h4>
+                  {selectedDayDetails.expensesList.length > 0 ? (
+                    <div className="border border-slate-850 rounded-xl overflow-hidden bg-slate-950/15 max-h-40 overflow-y-auto">
+                      <table className="w-full text-left text-[11px]">
+                        <thead className="bg-slate-950/70 text-slate-400 uppercase font-mono text-[8px] border-b border-slate-850 sticky top-0">
+                          <tr>
+                            <th className="p-2.5 font-bold">Descrição</th>
+                            <th className="p-2.5 font-bold">Categoria</th>
+                            <th className="p-2.5 font-bold text-right">Valor</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-850/50">
+                          {selectedDayDetails.expensesList.map((e: any, idx: number) => (
+                            <tr key={idx} className="hover:bg-slate-900/30">
+                              <td className="p-2.5 text-slate-200 font-medium">{e.description}</td>
+                              <td className="p-2.5 text-slate-400">{e.category || "Geral"}</td>
+                              <td className="p-2.5 font-mono text-right text-rose-400 font-bold">
+                                - R$ {e.value.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="p-5 text-center border border-dashed border-slate-800 rounded-xl bg-slate-950/5">
+                      <p className="text-[10px] text-slate-500 font-medium font-mono">Nenhuma despesa standalone registrada.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Footer Controls */}
+              <div className="p-4 border-t border-slate-800 flex items-center justify-between bg-slate-950/50">
+                <button
+                  type="button"
+                  onClick={() => setSelectedDayDetails(null)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-750 text-slate-300 hover:text-slate-100 rounded-xl text-[11px] font-bold cursor-pointer transition-all"
+                >
+                  Fechar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => printReport(selectedDayDetails.dateStr, selectedDayDetails)}
+                  className="px-4 py-2 bg-brand-cyan hover:bg-cyan-400 text-slate-950 rounded-xl text-[11px] font-black flex items-center gap-1.5 cursor-pointer shadow-[0_0_15px_rgba(34,211,238,0.25)] transition-all"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path>
+                  </svg>
+                  <span>Imprimir Relatório</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
