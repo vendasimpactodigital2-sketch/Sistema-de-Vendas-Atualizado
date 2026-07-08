@@ -1086,6 +1086,103 @@ export default function App() {
     checkSession();
   }, []);
 
+  // Listen to Supabase Auth state changes and handle token/session expiration gracefully
+  useEffect(() => {
+    if (!isSupabaseConfigured()) return;
+    const supabase = getSupabase();
+    if (!supabase) return;
+
+    console.log("[Auth] Registering onAuthStateChange listener to monitor token validity...");
+    
+    // Flag to prevent multiple consecutive alerts/redirects
+    let isRedirecting = false;
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log(`[Auth] Event: ${event}, Session Active: ${!!session}`);
+
+      if (event === "SIGNED_OUT") {
+        const savedUser = localStorage.getItem("NUCLEO_CURRENT_USER");
+        if (savedUser && !isRedirecting) {
+          try {
+            const parsed = JSON.parse(savedUser);
+            // Verify if user is a standard Auth user. If they are a local attendant who doesn't use Supabase Auth session,
+            // we should not log them out just because Supabase Auth signed out.
+            const isLocalAttendant = parsed.owner_id && parsed.owner_id !== parsed.id && parsed.role !== "administrador";
+            
+            if (!isLocalAttendant) {
+              isRedirecting = true;
+              console.warn("[Auth] Standard Supabase Auth user was signed out. Checking if we can refresh session...");
+              
+              // Attempt to recover/refresh the session first as a automatic background renewal
+              const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+              if (refreshError || !refreshData.session) {
+                console.error("[Auth] Session recovery failed. Redirecting to login...", refreshError?.message);
+                
+                // Show a clear, polite warning toast instead of crashing the system
+                addToast("Sua sessão expirou por inatividade. Faça login novamente para continuar com segurança. 🔒", "warning");
+                
+                // Delay slightly to let the user see the warning, then redirect cleanly without F5
+                setTimeout(() => {
+                  setCurrentUser(null);
+                  localStorage.removeItem("NUCLEO_CURRENT_USER");
+                  localStorage.removeItem("NUCLEO_USERS");
+                  localStorage.removeItem("NUCLEO_CASH_REGISTER");
+                  localStorage.removeItem("NUCLEO_LAST_CASH_REGISTER_SYNCED_DATE");
+                  sessionStorage.clear();
+                  isRedirecting = false;
+                }, 1800);
+              } else {
+                console.log("[Auth] Session recovered successfully via onAuthStateChange refresh!");
+                addToast("Sua conexão foi restabelecida com sucesso! 🟢", "success");
+                isRedirecting = false;
+              }
+            }
+          } catch (err) {
+            console.error("[Auth] Error handling SIGNED_OUT event:", err);
+            isRedirecting = false;
+          }
+        }
+      } else if (event === "TOKEN_REFRESHED") {
+        console.log("[Auth] Session token refreshed successfully in background!");
+        addToast("Sua sessão foi revalidada com segurança. 🟢", "info");
+      }
+    });
+
+    // Highly professional tab focus listener: when the computer/tab wakes up or is focused, 
+    // proactively check and renew the session to avoid subsequent database call authorization errors!
+    const handleWindowFocus = async () => {
+      console.log("[Auth] Tab focused/woken up, proactively validating active session...");
+      try {
+        const { data: { session: activeSession } } = await supabase.auth.getSession();
+        if (activeSession) {
+          // Check if token is nearing expiration (e.g., less than 15 minutes remaining)
+          const expiresAt = activeSession.expires_at || 0;
+          const nowInSecs = Math.floor(Date.now() / 1000);
+          const timeRemaining = expiresAt - nowInSecs;
+          
+          if (timeRemaining < 900) { // Less than 15 minutes
+            console.log(`[Auth] Token is expiring in ${timeRemaining}s, initiating automatic proactive refresh...`);
+            const { data: refreshRes, error: refreshErr } = await supabase.auth.refreshSession();
+            if (refreshErr) {
+              console.warn("[Auth] Proactive token refresh failed on focus:", refreshErr.message);
+            } else if (refreshRes.session) {
+              console.log("[Auth] Proactive token refresh on focus completed successfully!");
+            }
+          }
+        }
+      } catch (err) {
+        console.error("[Auth] Exception during proactive session check on window focus:", err);
+      }
+    };
+
+    window.addEventListener("focus", handleWindowFocus);
+
+    return () => {
+      subscription.unsubscribe();
+      window.removeEventListener("focus", handleWindowFocus);
+    };
+  }, [currentUser]);
+
   // Automatic user ID migration to valid UUID to avoid PostgreSQL parse constraints (code 22P02)
   useEffect(() => {
     if (currentUser) {
@@ -1140,35 +1237,27 @@ export default function App() {
       if (!isBackground) {
         setDbSyncing(true);
       }
-      console.log(`Starting ${isBackground ? "background" : "foreground"} remote sync with Supabase...`);
+      console.log(`Starting ${isBackground ? "background" : "foreground"} remote sync with Supabase (forceAll: ${forceAll})...`);
 
       const companyOwnerId = activeUser.owner_id || activeUser.id; // CRITICAL: Resolve the tenant/company owner ID!
-
-      // 1. Sync Company Profile
-      try {
-        const remoteCompany = await dbGetCompanyProfile(companyOwnerId);
-        companyLoadedForUserId.current = activeUser.id; // Mark as loaded for this active user ID to allow safe auto-sync later
-        if (remoteCompany) {
-          setCompany(remoteCompany);
-          localStorage.setItem("NUCLEO_COMPANY_PROFILE", JSON.stringify(remoteCompany));
-        } else {
-          setCompany(cleanDefaultCompanyProfile);
-          localStorage.setItem("NUCLEO_COMPANY_PROFILE", JSON.stringify(cleanDefaultCompanyProfile));
-        }
-      } catch (err) {
-        console.error("Failed to sync company from Supabase", err);
-      }
 
       // Fetch lightweight metadata first for sales and expenses (including cash register row in sales)
       let shouldSyncSales = true;
       let shouldSyncExpenses = true;
       let shouldSyncCashRegister = true;
 
+      // Prepare an array of promises for parallel execution to maximize speed
+      const initialPromises: Promise<any>[] = [];
+      let metadataPromiseIndex = -1;
+      let staticPromiseIndex = -1;
+
+      // 1. Fetch sales and expenses metadata in parallel (if not forcing all)
       if (!forceAll) {
-        try {
-          const supabase = getSupabase();
-          if (supabase) {
-            const [salesMetaRes, expensesMetaRes] = await Promise.all([
+        const supabase = getSupabase();
+        if (supabase) {
+          metadataPromiseIndex = initialPromises.length;
+          initialPromises.push(
+            Promise.all([
               supabase
                 .from("sales")
                 .select("id, date, total_value, client_name")
@@ -1177,160 +1266,156 @@ export default function App() {
                 .from("expenses")
                 .select("id, date, value, description")
                 .eq("user_id", companyOwnerId),
-            ]);
-
-            if (!salesMetaRes.error && salesMetaRes.data) {
-              const remoteSalesMeta = salesMetaRes.data;
-              const actualSalesMeta = remoteSalesMeta.filter(
-                (r) => r.id !== "cash_register_state" && r.id !== "quick_sales_config"
-              );
-              const localSalesCombined = [...sales, ...budgets];
-
-              let salesMismatched = false;
-              if (actualSalesMeta.length !== localSalesCombined.length) {
-                salesMismatched = true;
-              } else {
-                const localMap = new Map<string, Sale>();
-                for (const s of localSalesCombined) {
-                  localMap.set(s.id, s);
-                }
-                for (const r of actualSalesMeta) {
-                  const local = localMap.get(r.id);
-                  if (!local) {
-                    salesMismatched = true;
-                    break;
-                  }
-                  if (
-                    getLocalDateFromISO(local.date) !== getLocalDateFromISO(r.date) ||
-                    Number(local.totalValue) !== Number(r.total_value) ||
-                    local.clientName !== r.client_name
-                  ) {
-                    salesMismatched = true;
-                    break;
-                  }
-                }
-              }
-
-              if (!salesMismatched) {
-                shouldSyncSales = false;
-                console.log("Sales & budgets are already up-to-date (metadata match). Skipping full fetch!");
-              }
-
-              // Check cash register state metadata
-              const remoteRegisterRow = remoteSalesMeta.find((r) => r.id === "cash_register_state");
-              const localSyncedRegisterDate = localStorage.getItem("NUCLEO_LAST_CASH_REGISTER_SYNCED_DATE") || "";
-              if (remoteRegisterRow) {
-                if (remoteRegisterRow.date === localSyncedRegisterDate) {
-                  shouldSyncCashRegister = false;
-                  console.log("Cash register is already up-to-date (metadata match). Skipping full fetch!");
-                } else {
-                  localStorage.setItem("NUCLEO_LAST_CASH_REGISTER_SYNCED_DATE_PENDING", remoteRegisterRow.date);
-                }
-              } else {
-                shouldSyncCashRegister = true;
-              }
-            }
-
-            if (!expensesMetaRes.error && expensesMetaRes.data) {
-              const remoteExpensesMeta = expensesMetaRes.data;
-              let expensesMismatched = false;
-              if (remoteExpensesMeta.length !== expenses.length) {
-                expensesMismatched = true;
-              } else {
-                const localMap = new Map<string, Expense>();
-                for (const e of expenses) {
-                  localMap.set(e.id, e);
-                }
-                for (const r of remoteExpensesMeta) {
-                  const local = localMap.get(r.id);
-                  if (!local) {
-                    expensesMismatched = true;
-                    break;
-                  }
-                  const localVal = typeof local.value === "string" ? Number(local.value) : local.value;
-                  if (
-                    getLocalDateFromISO(local.date) !== getLocalDateFromISO(r.date) ||
-                    Number(localVal) !== Number(r.value) ||
-                    local.description !== r.description
-                  ) {
-                    expensesMismatched = true;
-                    break;
-                  }
-                }
-              }
-
-              if (!expensesMismatched) {
-                shouldSyncExpenses = false;
-                console.log("Expenses are already up-to-date (metadata match). Skipping full fetch!");
-              }
-            }
-          }
-        } catch (metaErr) {
-          console.warn("Failed checking lightweight metadata headers, will proceed with full sync fallback.", metaErr);
+            ])
+          );
         }
       }
 
-      // 2. Sync Sales & Budgets
-      if (shouldSyncSales) {
-        try {
-          const remoteSales = await dbGetSales(companyOwnerId);
-          if (remoteSales) {
-            const finalSales = remoteSales.filter((s) => !s.isBudget);
-            const finalBudgets = remoteSales.filter((s) => s.isBudget);
-            
-            setSales(finalSales);
-            setBudgets(finalBudgets);
-            
-            localStorage.setItem("NUCLEO_SALES", JSON.stringify(finalSales));
-            localStorage.setItem("NUCLEO_BUDGETS", JSON.stringify(finalBudgets));
-          }
-        } catch (err) {
-          console.error("Failed to sync sales/budgets from Supabase", err);
-        }
-      }
-
-      // 3. Sync Expenses
-      if (shouldSyncExpenses) {
-        try {
-          const remoteExpenses = await dbGetExpenses(companyOwnerId);
-          if (remoteExpenses) {
-            setExpenses(remoteExpenses);
-            localStorage.setItem("NUCLEO_EXPENSES", JSON.stringify(remoteExpenses));
-          }
-        } catch (err) {
-          console.error("Failed to sync expenses from Supabase", err);
-        }
-      }
-
-      // 4. Sync Goal Configurations
-      try {
-        const remoteGoals = await dbGetGoals(companyOwnerId);
-        if (remoteGoals) {
-          setGoalValue(remoteGoals.goalValue);
-          setGoalType(remoteGoals.goalType);
-          setNotifiedGoalValue(remoteGoals.notifiedGoalValue);
-          setNotifiedGoalDate(remoteGoals.notifiedGoalDate);
-          
-          localStorage.setItem("NUCLEO_GOAL_VALUE", String(remoteGoals.goalValue));
-          localStorage.setItem("NUCLEO_GOAL_TYPE", remoteGoals.goalType);
-          localStorage.setItem("NUCLEO_NOTIFIED_GOAL_VALUE", String(remoteGoals.notifiedGoalValue));
-          localStorage.setItem("NUCLEO_NOTIFIED_GOAL_DATE", remoteGoals.notifiedGoalDate);
-        }
-      } catch (err) {
-        console.error("Failed to sync goals from Supabase", err);
-      }
-
-      // 5. Sync Monthly Bills (gastos_mensais)
-      try {
+      // 2. Fetch static/configuration tables (Company Profile, Goals, Bills, Product Catalog) in parallel
+      // We only sync these if we are in the foreground, forceAll is active, or they haven't been loaded yet.
+      const shouldSyncStatic = !isBackground || forceAll || companyLoadedForUserId.current !== activeUser.id || !company?.tradingName;
+      if (shouldSyncStatic) {
         const supabase = getSupabase();
-        if (supabase) {
-          const { data, error } = await supabase
-            .from("gastos_mensais")
-            .select("*")
-            .eq("user_id", companyOwnerId);
+        staticPromiseIndex = initialPromises.length;
+        initialPromises.push(
+          Promise.all([
+            dbGetCompanyProfile(companyOwnerId),
+            dbGetGoals(companyOwnerId),
+            supabase ? supabase.from("gastos_mensais").select("*").eq("user_id", companyOwnerId) : Promise.resolve({ data: [], error: null }),
+            supabase ? supabase.from("produtos").select("*").eq("user_id", companyOwnerId) : Promise.resolve({ data: [], error: null }),
+          ])
+        );
+      }
 
-          if (!error && data) {
-            const mappedBills: MonthlyBill[] = data.map((d: any) => ({
+      // Execute all initial requests concurrently!
+      const initialResults = await Promise.all(initialPromises);
+
+      // Process Metadata Results (to determine if we can skip sales / expenses full downloads)
+      if (metadataPromiseIndex !== -1) {
+        const metadataRes = initialResults[metadataPromiseIndex];
+        if (metadataRes) {
+          const [salesMetaRes, expensesMetaRes] = metadataRes;
+
+          if (salesMetaRes && !salesMetaRes.error && salesMetaRes.data) {
+            const remoteSalesMeta = salesMetaRes.data;
+            const actualSalesMeta = remoteSalesMeta.filter(
+              (r: any) => r.id !== "cash_register_state" && r.id !== "quick_sales_config"
+            );
+            const localSalesCombined = [...sales, ...budgets];
+
+            let salesMismatched = false;
+            if (actualSalesMeta.length !== localSalesCombined.length) {
+              salesMismatched = true;
+            } else {
+              const localMap = new Map<string, Sale>();
+              for (const s of localSalesCombined) {
+                localMap.set(s.id, s);
+              }
+              for (const r of actualSalesMeta) {
+                const local = localMap.get(r.id);
+                if (!local) {
+                  salesMismatched = true;
+                  break;
+                }
+                if (
+                  getLocalDateFromISO(local.date) !== getLocalDateFromISO(r.date) ||
+                  Number(local.totalValue) !== Number(r.total_value) ||
+                  local.clientName !== r.client_name
+                ) {
+                  salesMismatched = true;
+                  break;
+                }
+              }
+            }
+
+            if (!salesMismatched) {
+              shouldSyncSales = false;
+              console.log("Sales & budgets are already up-to-date (metadata match). Skipping full fetch!");
+            }
+
+            // Check cash register state metadata
+            const remoteRegisterRow = remoteSalesMeta.find((r: any) => r.id === "cash_register_state");
+            const localSyncedRegisterDate = localStorage.getItem("NUCLEO_LAST_CASH_REGISTER_SYNCED_DATE") || "";
+            if (remoteRegisterRow) {
+              if (remoteRegisterRow.date === localSyncedRegisterDate) {
+                shouldSyncCashRegister = false;
+                console.log("Cash register is already up-to-date (metadata match). Skipping full fetch!");
+              } else {
+                localStorage.setItem("NUCLEO_LAST_CASH_REGISTER_SYNCED_DATE_PENDING", remoteRegisterRow.date);
+              }
+            } else {
+              shouldSyncCashRegister = true;
+            }
+          }
+
+          if (expensesMetaRes && !expensesMetaRes.error && expensesMetaRes.data) {
+            const remoteExpensesMeta = expensesMetaRes.data;
+            let expensesMismatched = false;
+            if (remoteExpensesMeta.length !== expenses.length) {
+              expensesMismatched = true;
+            } else {
+              const localMap = new Map<string, Expense>();
+              for (const e of expenses) {
+                localMap.set(e.id, e);
+              }
+              for (const r of remoteExpensesMeta) {
+                const local = localMap.get(r.id);
+                if (!local) {
+                  expensesMismatched = true;
+                  break;
+                }
+                const localVal = typeof local.value === "string" ? Number(local.value) : local.value;
+                if (
+                  getLocalDateFromISO(local.date) !== getLocalDateFromISO(r.date) ||
+                  Number(localVal) !== Number(r.value) ||
+                  local.description !== r.description
+                ) {
+                  expensesMismatched = true;
+                  break;
+                }
+              }
+            }
+
+            if (!expensesMismatched) {
+              shouldSyncExpenses = false;
+              console.log("Expenses are already up-to-date (metadata match). Skipping full fetch!");
+            }
+          }
+        }
+      }
+
+      // Process Static Configuration Results
+      if (staticPromiseIndex !== -1) {
+        const staticRes = initialResults[staticPromiseIndex];
+        if (staticRes) {
+          const [remoteCompany, remoteGoals, staticBillsRes, staticProductsRes] = staticRes;
+
+          // 2.1 Company Profile
+          companyLoadedForUserId.current = activeUser.id; // Mark as loaded for this active user ID to allow safe auto-sync later
+          if (remoteCompany) {
+            setCompany(remoteCompany);
+            localStorage.setItem("NUCLEO_COMPANY_PROFILE", JSON.stringify(remoteCompany));
+          } else {
+            setCompany(cleanDefaultCompanyProfile);
+            localStorage.setItem("NUCLEO_COMPANY_PROFILE", JSON.stringify(cleanDefaultCompanyProfile));
+          }
+
+          // 2.2 Goals
+          if (remoteGoals) {
+            setGoalValue(remoteGoals.goalValue);
+            setGoalType(remoteGoals.goalType);
+            setNotifiedGoalValue(remoteGoals.notifiedGoalValue);
+            setNotifiedGoalDate(remoteGoals.notifiedGoalDate);
+            
+            localStorage.setItem("NUCLEO_GOAL_VALUE", String(remoteGoals.goalValue));
+            localStorage.setItem("NUCLEO_GOAL_TYPE", remoteGoals.goalType);
+            localStorage.setItem("NUCLEO_NOTIFIED_GOAL_VALUE", String(remoteGoals.notifiedGoalValue));
+            localStorage.setItem("NUCLEO_NOTIFIED_GOAL_DATE", remoteGoals.notifiedGoalDate);
+          }
+
+          // 2.3 Monthly Bills
+          if (staticBillsRes && !staticBillsRes.error && staticBillsRes.data) {
+            const mappedBills: MonthlyBill[] = staticBillsRes.data.map((d: any) => ({
               id: d.id,
               name: d.name || d.description || d.titulo || d.nome || "",
               value: Number(d.value || d.valor || 0),
@@ -1341,22 +1426,10 @@ export default function App() {
             setBills(mappedBills);
             localStorage.setItem("NUCLEO_MONTHLY_BILLS", JSON.stringify(mappedBills));
           }
-        }
-      } catch (err) {
-        console.error("Failed to sync monthly bills from Supabase", err);
-      }
 
-      // 6. Sync Product Catalog (produtos)
-      try {
-        const supabase = getSupabase();
-        if (supabase) {
-          const { data, error } = await supabase
-            .from("produtos")
-            .select("*")
-            .eq("user_id", companyOwnerId);
-
-          if (!error && data) {
-            const mappedProducts: CatalogProduct[] = data.map((d: any) => {
+          // 2.4 Product Catalog
+          if (staticProductsRes && !staticProductsRes.error && staticProductsRes.data) {
+            const mappedProducts: CatalogProduct[] = staticProductsRes.data.map((d: any) => {
               const cost = Number(d.cost_price ?? d.costPrice ?? d.preco_custo ?? d.valor_custo ?? 0);
               const sale = Number(d.sale_price ?? d.salePrice ?? d.preco_venda ?? d.valor_venda ?? 0);
               return {
@@ -1372,15 +1445,58 @@ export default function App() {
             setCatalogProducts(mappedProducts);
           }
         }
-      } catch (err) {
-        console.error("Failed to sync product catalog from Supabase", err);
       }
 
-      // 7. Sync Cash Register State
+      // 3. Fetch actual Sales, Expenses and/or Cash Register States in parallel if they are mismatched/outdated
+      const dataPromises: Promise<any>[] = [];
+      let salesPromiseIdx = -1;
+      let expensesPromiseIdx = -1;
+      let registerPromiseIdx = -1;
+
+      if (shouldSyncSales) {
+        salesPromiseIdx = dataPromises.length;
+        dataPromises.push(dbGetSales(companyOwnerId));
+      }
+      if (shouldSyncExpenses) {
+        expensesPromiseIdx = dataPromises.length;
+        dataPromises.push(dbGetExpenses(companyOwnerId));
+      }
       if (shouldSyncCashRegister) {
-        try {
-          const companyId = activeUser.owner_id || activeUser.id;
-          const remote = await dbGetCashRegister(companyId);
+        registerPromiseIdx = dataPromises.length;
+        dataPromises.push(dbGetCashRegister(companyOwnerId));
+      }
+
+      // If we have any data to pull, execute them in parallel!
+      if (dataPromises.length > 0) {
+        const dataResults = await Promise.all(dataPromises);
+
+        // 3.1 Sync Sales & Budgets
+        if (salesPromiseIdx !== -1) {
+          const remoteSales = dataResults[salesPromiseIdx];
+          if (remoteSales) {
+            const finalSales = remoteSales.filter((s: any) => !s.isBudget);
+            const finalBudgets = remoteSales.filter((s: any) => s.isBudget);
+            
+            setSales(finalSales);
+            setBudgets(finalBudgets);
+            
+            localStorage.setItem("NUCLEO_SALES", JSON.stringify(finalSales));
+            localStorage.setItem("NUCLEO_BUDGETS", JSON.stringify(finalBudgets));
+          }
+        }
+
+        // 3.2 Sync Expenses
+        if (expensesPromiseIdx !== -1) {
+          const remoteExpenses = dataResults[expensesPromiseIdx];
+          if (remoteExpenses) {
+            setExpenses(remoteExpenses);
+            localStorage.setItem("NUCLEO_EXPENSES", JSON.stringify(remoteExpenses));
+          }
+        }
+
+        // 3.3 Sync Cash Register
+        if (registerPromiseIdx !== -1) {
+          const remote = dataResults[registerPromiseIdx];
           if (remote) {
             setCashRegister(remote);
             localStorage.setItem("NUCLEO_CASH_REGISTER", JSON.stringify(remote));
@@ -1398,7 +1514,7 @@ export default function App() {
                   .from("sales")
                   .select("date")
                   .eq("id", "cash_register_state")
-                  .eq("user_id", companyId)
+                  .eq("user_id", companyOwnerId)
                   .maybeSingle();
                 if (data?.date) {
                   localStorage.setItem("NUCLEO_LAST_CASH_REGISTER_SYNCED_DATE", data.date);
@@ -1406,14 +1522,18 @@ export default function App() {
               }
             }
           }
-        } catch (err) {
-          console.error("Failed to sync cash register from Supabase", err);
         }
       }
 
-      await checkGlobalRegisterStatus(activeUser.id);
+      // 4. Update the global register open status state
+      if (isBackground) {
+        // Safe instant local check in background to avoid extra remote query
+        setIsGlobalRegisterOpen(!!cashRegister?.currentSession && cashRegister.currentSession.status === "aberto");
+      } else {
+        await checkGlobalRegisterStatus(activeUser.id);
+      }
 
-      console.log(`Supabase remote sync completed! (${isBackground ? "background" : "foreground"})`);
+      console.log(`Supabase remote sync completed successfully! (${isBackground ? "background" : "foreground"})`);
 
       // Play upbeat startup sound only for first/manual sync
       if (!isBackground && soundEnabled) {
@@ -1437,15 +1557,15 @@ export default function App() {
     }
   }, [currentUser]);
 
-  // Active real-time background sync loop to keep data perfectly synchronized across multiple machines (every 2.5s)
+  // Active real-time background sync loop to keep data perfectly synchronized across multiple machines (every 15s fallback)
   useEffect(() => {
     if (!currentUser || !isSupabaseConfigured()) return;
 
-    console.log("Registering active real-time background synchronization interval (2.5s)...");
+    console.log("Registering active real-time background synchronization interval (15s fallback)...");
     
     const syncInterval = setInterval(() => {
       triggerRemoteSync(currentUser, true);
-    }, 2500); // Polls every 2.5 seconds in the background as an ultra-fast failsafe
+    }, 15000); // Polls every 15 seconds in the background as a lightweight connection-drop failsafe
 
     return () => {
       clearInterval(syncInterval);
@@ -1624,7 +1744,13 @@ export default function App() {
             }
           }
 
-          triggerRemoteSync(currentUser, true);
+          const isStaticTable = 
+            payload.table === "produtos" || 
+            payload.table === "goals" || 
+            payload.table === "gastos_mensais" || 
+            payload.table === "company_profile";
+
+          triggerRemoteSync(currentUser, true, isStaticTable);
         }
       )
       .subscribe((status) => {
