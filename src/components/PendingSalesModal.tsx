@@ -122,11 +122,12 @@ export function PendingSalesModal({ isOpen, onClose, sales, onSaveSale, company,
   const localDate = new Date();
   const todayStr = `${localDate.getFullYear()}-${String(localDate.getMonth() + 1).padStart(2, '0')}-${String(localDate.getDate()).padStart(2, '0')}`;
 
-  // Filter sales that are not yet delivered/withdrawn
+  // Filter sales that are not yet delivered/withdrawn and match pending deliveryStatus
   const pendingSales = sales.filter((sale) => {
+    const isDelivered = sale.deliveryStatus === 'entregue' || sale.materialEntregue === true;
     const hasValidFutureOrTodayDelivery = sale.deliveryDate && sale.deliveryDate !== "Sem data informada" && sale.deliveryDate >= todayStr;
     const isPending = !sale.isBudget && 
-                      (sale.materialEntregue === false || !sale.materialEntregue) && 
+                      !isDelivered && 
                       (sale.balanceDue > 0 || hasValidFutureOrTodayDelivery);
     const matchesSearch = 
       sale.clientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -135,9 +136,10 @@ export function PendingSalesModal({ isOpen, onClose, sales, onSaveSale, company,
   });
 
   const totalPendingAmount = sales.filter(s => {
+    const isDelivered = s.deliveryStatus === 'entregue' || s.materialEntregue === true;
     const hasValidFutureOrTodayDelivery = s.deliveryDate && s.deliveryDate !== "Sem data informada" && s.deliveryDate >= todayStr;
     return !s.isBudget && 
-           (s.materialEntregue === false || !s.materialEntregue) && 
+           !isDelivered && 
            (s.balanceDue > 0 || hasValidFutureOrTodayDelivery);
   }).reduce((acc, sale) => acc + sale.balanceDue, 0);
 
@@ -691,6 +693,8 @@ export function PendingSalesModal({ isOpen, onClose, sales, onSaveSale, company,
       deliveryDate: new Date().toISOString(), // Register delivery / withdrawal today
       orderDate: originalOrderDate,
       payments: updatedPayments,
+      materialEntregue: newBalanceDue < 0.01 ? true : sale.materialEntregue,
+      deliveryStatus: newBalanceDue < 0.01 ? 'entregue' : (sale.deliveryStatus || 'pendente'),
     };
 
     // Save changes
@@ -717,6 +721,7 @@ export function PendingSalesModal({ isOpen, onClose, sales, onSaveSale, company,
       ...sale,
       deliveryDate: new Date().toISOString().substring(0, 10), // Register delivery / withdrawal today
       materialEntregue: true,
+      deliveryStatus: 'entregue',
       orderDate: originalOrderDate,
     };
 

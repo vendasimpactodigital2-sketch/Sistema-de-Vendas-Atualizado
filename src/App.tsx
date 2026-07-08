@@ -3891,9 +3891,10 @@ export default function App() {
         pendingSalesCount={sales.filter((s) => {
           const lDate = new Date();
           const tStr = `${lDate.getFullYear()}-${String(lDate.getMonth() + 1).padStart(2, '0')}-${String(lDate.getDate()).padStart(2, '0')}`;
+          const isDelivered = s.deliveryStatus === 'entregue' || s.materialEntregue === true;
           const hasValidFutureOrTodayDelivery = s.deliveryDate && s.deliveryDate !== "Sem data informada" && s.deliveryDate >= tStr;
           return !s.isBudget && 
-                 (s.materialEntregue === false || !s.materialEntregue) && 
+                 !isDelivered && 
                  (s.balanceDue > 0 || hasValidFutureOrTodayDelivery);
         }).length}
         onRetiradasClick={() => setShowPendingModal(true)}
