@@ -3653,17 +3653,8 @@ export default function App() {
     );
   }
 
-  const handleLogout = async () => {
-    if (isSupabaseConfigured()) {
-      try {
-        await dbSignOut();
-      } catch (err) {
-        console.error("Error signing out from Supabase:", err);
-      }
-    }
-    
-    // Clear only session-specific key and users listing to guarantee local tenant session trace clearance 
-    // without completely wiping the cached offline database file blocks.
+  const handleLogout = () => {
+    // 1. Clear session-specific keys and user listings locally first to guarantee instant visual logout
     localStorage.removeItem("NUCLEO_CURRENT_USER");
     localStorage.removeItem("NUCLEO_USERS");
     localStorage.removeItem("NUCLEO_CASH_REGISTER");
@@ -3684,12 +3675,23 @@ export default function App() {
     localStorage.removeItem("NUCLEO_CART_CLIENT_MODE");
     localStorage.removeItem("NUCLEO_CART_COST_BREAKDOWN_ITEMS");
     
-    sessionStorage.clear();
+    try {
+      sessionStorage.clear();
+    } catch (e) {
+      console.warn("sessionStorage.clear failed:", e);
+    }
     
-    // Clear current user state
+    // 2. Clear current user state
     setCurrentUser(null);
+
+    // 3. Perform Supabase sign out in the background (non-blocking)
+    if (isSupabaseConfigured()) {
+      dbSignOut().catch((err) => {
+        console.error("Error signing out from Supabase:", err);
+      });
+    }
     
-    // Force complete reload to clear browser RAM state entirely
+    // 4. Force complete reload to clear browser RAM state and redirect cleanly
     window.location.href = "/";
   };
 
@@ -3886,7 +3888,14 @@ export default function App() {
           handleSwitchTab("clientes");
           setLocateClientClicks((prev) => prev + 1);
         }}
-        pendingSalesCount={sales.filter((s) => s.balanceDue > 0).length}
+        pendingSalesCount={sales.filter((s) => {
+          const lDate = new Date();
+          const tStr = `${lDate.getFullYear()}-${String(lDate.getMonth() + 1).padStart(2, '0')}-${String(lDate.getDate()).padStart(2, '0')}`;
+          const hasValidFutureOrTodayDelivery = s.deliveryDate && s.deliveryDate !== "Sem data informada" && s.deliveryDate >= tStr;
+          return !s.isBudget && 
+                 (s.materialEntregue === false || !s.materialEntregue) && 
+                 (s.balanceDue > 0 || hasValidFutureOrTodayDelivery);
+        }).length}
         onRetiradasClick={() => setShowPendingModal(true)}
         onMetasSemanaClick={() => setShowWeeklyGoalModal(true)}
         isCashRegisterOpen={!!cashRegister.currentSession}

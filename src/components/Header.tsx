@@ -519,13 +519,13 @@ export function Header({
               <button
                 type="button"
                 onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-                className="p-1 rounded-lg text-slate-400 hover:text-amber-400 hover:bg-amber-500/10 transition-all cursor-pointer border border-transparent hover:border-amber-500/20"
+                className="p-2 rounded-xl text-slate-400 hover:text-amber-400 hover:bg-amber-500/10 active:scale-95 transition-all cursor-pointer border border-transparent hover:border-amber-500/20 shadow-sm"
                 title={theme === "dark" ? "Alternar para Modo Claro" : "Alternar para Modo Escuro"}
               >
                 {theme === "dark" ? (
-                  <Sun className="h-3 w-3" />
+                  <Sun className="h-4.5 w-4.5" />
                 ) : (
-                  <Moon className="h-3.5 w-3.5" />
+                  <Moon className="h-4.5 w-4.5" />
                 )}
               </button>
 
@@ -533,10 +533,10 @@ export function Header({
                 <button
                   type="button"
                   onClick={onLogout}
-                  className="p-1 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-955/30 transition-all cursor-pointer border border-transparent hover:border-red-900/40"
+                  className="p-2 rounded-xl text-slate-400 hover:text-red-400 hover:bg-red-500/10 active:scale-95 transition-all cursor-pointer border border-transparent hover:border-red-500/20 shadow-sm"
                   title="Sair da Conta"
                 >
-                  <LogOut className="h-3 w-3" />
+                  <LogOut className="h-4.5 w-4.5" />
                 </button>
               )}
             </div>

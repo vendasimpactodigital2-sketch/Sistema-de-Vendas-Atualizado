@@ -119,16 +119,27 @@ export function PendingSalesModal({ isOpen, onClose, sales, onSaveSale, company,
 
   if (!isOpen) return null;
 
-  // Filter sales that have remaining outstanding balances (balanceDue > 0) OR are not yet delivered
+  const localDate = new Date();
+  const todayStr = `${localDate.getFullYear()}-${String(localDate.getMonth() + 1).padStart(2, '0')}-${String(localDate.getDate()).padStart(2, '0')}`;
+
+  // Filter sales that are not yet delivered/withdrawn
   const pendingSales = sales.filter((sale) => {
-    const isPending = sale.balanceDue > 0 || sale.materialEntregue === false;
+    const hasValidFutureOrTodayDelivery = sale.deliveryDate && sale.deliveryDate !== "Sem data informada" && sale.deliveryDate >= todayStr;
+    const isPending = !sale.isBudget && 
+                      (sale.materialEntregue === false || !sale.materialEntregue) && 
+                      (sale.balanceDue > 0 || hasValidFutureOrTodayDelivery);
     const matchesSearch = 
       sale.clientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       sale.clientPhone.replace(/\D/g, "").includes(searchTerm.replace(/\D/g, ""));
     return isPending && matchesSearch;
   });
 
-  const totalPendingAmount = sales.reduce((acc, sale) => acc + sale.balanceDue, 0);
+  const totalPendingAmount = sales.filter(s => {
+    const hasValidFutureOrTodayDelivery = s.deliveryDate && s.deliveryDate !== "Sem data informada" && s.deliveryDate >= todayStr;
+    return !s.isBudget && 
+           (s.materialEntregue === false || !s.materialEntregue) && 
+           (s.balanceDue > 0 || hasValidFutureOrTodayDelivery);
+  }).reduce((acc, sale) => acc + sale.balanceDue, 0);
 
   const formatBRL = (val: number) => {
     return new Intl.NumberFormat("pt-BR", {
