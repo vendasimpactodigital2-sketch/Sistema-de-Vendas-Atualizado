@@ -688,7 +688,8 @@ export function PendingSalesModal({ isOpen, onClose, sales, onSaveSale, company,
       downPayment: newDownPayment,
       balanceDue: newBalanceDue >= 0.01 ? newBalanceDue : 0,
       date: newDate,
-      deliveryDate: new Date().toISOString(), // Register delivery / withdrawal today
+      deliveryDate: new Date().toISOString().substring(0, 10), // Register delivery / withdrawal today
+      materialEntregue: true, // Automatically confirm delivery/withdrawal when checked off
       orderDate: originalOrderDate,
       payments: updatedPayments,
     };
@@ -697,7 +698,7 @@ export function PendingSalesModal({ isOpen, onClose, sales, onSaveSale, company,
     onSaveSale(updatedSale);
 
     // Provide immediate user visual feedback
-    setSuccessMessage(`Recebimento de ${formatBRL(amountToPay)} registrado com sucesso para ${sale.clientName.toUpperCase()}!`);
+    setSuccessMessage(`Recebimento de ${formatBRL(amountToPay)} registrado e retirada concluída com sucesso para ${sale.clientName.toUpperCase()}!`);
 
     // Reset localized states
     const updatedAmounts = { ...paymentAmounts };
@@ -707,6 +708,180 @@ export function PendingSalesModal({ isOpen, onClose, sales, onSaveSale, company,
     setTimeout(() => {
       setSuccessMessage(null);
     }, 4000);
+  };
+
+  // Print a daily summary of all picked up or checked off orders today
+  const handlePrintDailyReport = () => {
+    const todaySalesWithActivity = sales.filter((sale) => {
+      if (sale.isBudget) return false;
+
+      // 1. Check if delivered today
+      const isDeliveredToday = sale.materialEntregue && getLocalYMD(sale.deliveryDate) === todayStr;
+
+      // 2. Check if payment today
+      const hasPaymentToday = sale.payments && sale.payments.some(p => getLocalYMD(p.date) === todayStr);
+
+      return isDeliveredToday || hasPaymentToday;
+    });
+
+    const reportData = todaySalesWithActivity.map((sale) => {
+      let paidToday = 0;
+      const methodsToday: Record<string, number> = { dinheiro: 0, pix: 0, cartão: 0 };
+
+      if (sale.payments && sale.payments.length > 0) {
+        sale.payments.forEach((p) => {
+          if (getLocalYMD(p.date) === todayStr) {
+            paidToday += p.amount;
+            const m = String(p.method || 'dinheiro').toLowerCase();
+            if (m.includes('pix')) {
+              methodsToday.pix += p.amount;
+            } else if (m.includes('cart') || m.includes('card')) {
+              methodsToday.cartão += p.amount;
+            } else {
+              methodsToday.dinheiro += p.amount;
+            }
+          }
+        });
+      } else {
+        if (getLocalYMD(sale.date) === todayStr && sale.downPayment > 0) {
+          paidToday = sale.downPayment;
+          const m = String(sale.paymentMethod || 'dinheiro').toLowerCase();
+          if (m.includes('pix')) {
+            methodsToday.pix = sale.downPayment;
+          } else if (m.includes('cart') || m.includes('card')) {
+            methodsToday.cartão = sale.downPayment;
+          } else {
+            methodsToday.dinheiro = sale.downPayment;
+          }
+        }
+      }
+
+      const deliveredToday = sale.materialEntregue && getLocalYMD(sale.deliveryDate) === todayStr;
+
+      return {
+        id: sale.id,
+        clientName: sale.clientName,
+        totalValue: sale.totalValue,
+        balanceDue: sale.balanceDue,
+        paidToday,
+        methodsToday,
+        deliveredToday,
+        items: sale.items
+      };
+    });
+
+    const totalPaidToday = reportData.reduce((sum, item) => sum + item.paidToday, 0);
+    const totalDinheiro = reportData.reduce((sum, item) => sum + item.methodsToday.dinheiro, 0);
+    const totalPix = reportData.reduce((sum, item) => sum + item.methodsToday.pix, 0);
+    const totalCartao = reportData.reduce((sum, item) => sum + item.methodsToday.cartão, 0);
+    const totalDeliveredToday = reportData.filter(item => item.deliveredToday).length;
+
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) return;
+
+    const formattedDate = todayStr.split("-").reverse().join("/");
+
+    const itemsHtml = reportData.map((d) => {
+      const methodsStr = Object.entries(d.methodsToday)
+        .filter(([_, val]) => val > 0)
+        .map(([m, val]) => `${m.toUpperCase()}: ${formatBRL(val)}`)
+        .join(", ");
+
+      return `
+        <tr>
+          <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-size: 12px; font-weight: bold;">${d.clientName}</td>
+          <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-size: 12px;">${d.items.map(i => `${i.quantity}x ${i.description}`).join("<br/>")}</td>
+          <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-size: 12px; text-align: center;">
+            ${d.deliveredToday 
+              ? '<span style="color: #16a34a; font-weight: bold; background-color: #f0fdf4; padding: 2px 6px; border-radius: 4px;">SIM</span>' 
+              : '<span style="color: #64748b; background-color: #f1f5f9; padding: 2px 6px; border-radius: 4px;">NÃO</span>'}
+          </td>
+          <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-size: 12px; text-align: right; font-weight: bold; color: ${d.paidToday > 0 ? '#16a34a' : '#64748b'};">
+            ${formatBRL(d.paidToday)}
+            ${methodsStr ? `<br/><span style="font-size: 9px; color: #64748b; font-weight: normal;">(${methodsStr})</span>` : ''}
+          </td>
+          <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-size: 12px; text-align: right; font-family: monospace;">${formatBRL(d.balanceDue)}</td>
+        </tr>
+      `;
+    }).join("");
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Relatório de Entregas e Baixas - ${formattedDate}</title>
+          <style>
+            body { font-family: system-ui, -apple-system, sans-serif; color: #1e293b; padding: 30px; line-height: 1.5; }
+            .header { text-align: center; margin-bottom: 35px; border-bottom: 2px solid #e2e8f0; padding-bottom: 15px; }
+            .title { font-size: 24px; font-weight: 800; color: #0f172a; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.5px; }
+            .subtitle { font-size: 13px; color: #64748b; font-weight: 500; }
+            .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 35px; }
+            .summary-card { padding: 15px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #f8fafc; }
+            .summary-card .label { font-size: 10px; text-transform: uppercase; color: #64748b; font-weight: 800; letter-spacing: 0.5px; }
+            .summary-card .value { font-size: 18px; font-weight: 800; margin-top: 6px; color: #0f172a; }
+            .section-title { font-size: 14px; font-weight: 800; margin: 35px 0 12px 0; border-bottom: 2px solid #e2e8f0; padding-bottom: 6px; color: #1e293b; text-transform: uppercase; letter-spacing: 0.5px; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 25px; }
+            th, td { padding: 12px 10px; border-bottom: 1px solid #e2e8f0; text-align: left; font-size: 12px; }
+            th { background-color: #f1f5f9; font-weight: bold; color: #475569; text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px; }
+            .text-right { text-align: right; }
+            .print-btn-container { text-align: center; margin-top: 40px; }
+            .print-btn { padding: 12px 24px; font-size: 14px; font-weight: bold; background-color: #0284c7; color: white; border: none; border-radius: 8px; cursor: pointer; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); transition: all 0.2s; }
+            .print-btn:hover { background-color: #0369a1; }
+            @media print {
+              body { padding: 10px; }
+              .print-btn-container { display: none; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div class="title">Relatório Diário de Entregas e Baixas</div>
+            <div class="subtitle">Data de Referência: <b>${formattedDate}</b> &nbsp;|&nbsp; Gerado em: ${new Date().toLocaleDateString("pt-BR")} às ${new Date().toLocaleTimeString("pt-BR")}</div>
+          </div>
+          
+          <div class="summary-grid">
+            <div class="summary-card">
+              <div class="label">Total Recebido Hoje</div>
+              <div class="value" style="color: #16a34a;">${formatBRL(totalPaidToday)}</div>
+            </div>
+            <div class="summary-card">
+              <div class="label">Dinheiro Hoje</div>
+              <div class="value" style="color: #0284c7;">${formatBRL(totalDinheiro)}</div>
+            </div>
+            <div class="summary-card">
+              <div class="label">PIX Hoje</div>
+              <div class="value" style="color: #8b5cf6;">${formatBRL(totalPix)}</div>
+            </div>
+            <div class="summary-card">
+              <div class="label">Pedidos Entregues Hoje</div>
+              <div class="value" style="color: #1e293b;">${totalDeliveredToday}</div>
+            </div>
+          </div>
+          
+          <div class="section-title">Detalhamento dos Pedidos com Movimentação</div>
+          ${reportData.length > 0 ? `
+            <table>
+              <thead>
+                <tr>
+                  <th>Cliente</th>
+                  <th>Itens</th>
+                  <th style="text-align: center; width: 100px;">Retirado Hoje</th>
+                  <th class="text-right" style="width: 150px;">Valor Pago Hoje</th>
+                  <th class="text-right" style="width: 120px;">Saldo Restante</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${itemsHtml}
+              </tbody>
+            </table>
+          ` : `<p style="font-size: 13px; color: #64748b; font-style: italic; text-align: center; padding: 30px; border: 1px dashed #cbd5e1; border-radius: 8px;">Nenhuma entrega ou baixa de saldo pendente realizada nesta data.</p>`}
+          
+          <div class="print-btn-container">
+            <button class="print-btn" onclick="window.print()">Imprimir Relatório</button>
+          </div>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
   };
 
   // Confirm ONLY the delivery / withdrawal of the material (when balanceDue is already 0)
@@ -747,13 +922,24 @@ export function PendingSalesModal({ isOpen, onClose, sales, onSaveSale, company,
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-white bg-slate-950/40 hover:bg-slate-950/80 rounded-full border border-slate-800 self-end md:self-auto transition-all cursor-pointer"
-          >
-            <X className="h-4.5 w-4.5" />
-          </button>
+          <div className="flex items-center gap-2 self-end md:self-auto">
+            <button
+              type="button"
+              onClick={handlePrintDailyReport}
+              className="px-3 py-1.5 bg-brand-cyan/15 hover:bg-brand-cyan/20 border border-brand-cyan/30 text-brand-cyan hover:text-brand-cyan/90 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
+            >
+              <Printer className="h-3.5 w-3.5" />
+              <span>Relatório do Dia</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1.5 text-slate-400 hover:text-white bg-slate-950/40 hover:bg-slate-950/80 rounded-full border border-slate-800 transition-all cursor-pointer"
+            >
+              <X className="h-4.5 w-4.5" />
+            </button>
+          </div>
         </div>
 
         {/* Search header & cumulative summary boxes */}
