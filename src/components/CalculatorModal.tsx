@@ -120,19 +120,23 @@ export function CalculatorModal({ isOpen, onClose }: CalculatorModalProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fade-in font-sans">
+    <div 
+      className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in font-sans"
+      onClick={onClose}
+    >
       <div 
-        className="w-full max-w-xs bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden animate-scale-in"
+        className="w-full max-w-xs sm:max-w-sm bg-slate-900 border-2 border-slate-700/80 rounded-3xl shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9)] overflow-hidden animate-scale-in my-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-slate-800 bg-slate-950">
-          <span className="text-xs font-black text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+        <div className="flex items-center justify-between p-4 border-b border-slate-800 bg-slate-950/90">
+          <span className="text-xs font-black text-brand-cyan uppercase tracking-wider flex items-center gap-1.5">
             🧮 Calculadora Rápida
           </span>
           <button
             onClick={onClose}
-            className="p-1 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-all cursor-pointer"
+            className="p-1.5 rounded-xl text-slate-400 hover:text-white bg-slate-900 hover:bg-slate-800 border border-slate-800 transition-all cursor-pointer"
+            title="Fechar (Esc)"
           >
             <X className="h-4 w-4" />
           </button>

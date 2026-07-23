@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import confetti from "canvas-confetti";
 import ReactMarkdown from "react-markdown";
 import { Header } from "./components/Header";
+import { StandbyScreen } from "./components/StandbyScreen";
 import { AdminUnlockModal } from "./components/AdminUnlockModal";
 import { MetricsCards } from "./components/MetricsCards";
 import { SaleForm } from "./components/SaleForm";
@@ -394,6 +395,45 @@ export default function App() {
 
 
   const [activeTab, setActiveTab] = useState<"sale" | "dashboard" | "company" | "gastos" | "usuarios" | "relatorios" | "produtos" | "gastosMeta" | "clientes" | "suporte">("sale");
+  const [isStandbyActive, setIsStandbyActive] = useState<boolean>(true);
+
+  // Auto-Standby after 10 minutes (600,000ms) of user inactivity
+  useEffect(() => {
+    if (!currentUser || isStandbyActive) return;
+
+    let inactivityTimer: NodeJS.Timeout;
+
+    const resetInactivityTimer = () => {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      // 10 minutes = 10 * 60 * 1000 = 600,000 ms
+      inactivityTimer = setTimeout(() => {
+        setIsStandbyActive(true);
+      }, 600000);
+    };
+
+    const userActivityEvents = [
+      "mousemove",
+      "mousedown",
+      "keydown",
+      "touchstart",
+      "scroll",
+      "click",
+    ];
+
+    userActivityEvents.forEach((evt) => {
+      window.addEventListener(evt, resetInactivityTimer, { passive: true });
+    });
+
+    // Start timer initially
+    resetInactivityTimer();
+
+    return () => {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      userActivityEvents.forEach((evt) => {
+        window.removeEventListener(evt, resetInactivityTimer);
+      });
+    };
+  }, [currentUser, isStandbyActive]);
   const [showPendingModal, setShowPendingModal] = useState(false);
   const [showDailyGoalPrompt, setShowDailyGoalPrompt] = useState(false);
   const [showCongratsOverlay, setShowCongratsOverlay] = useState(false);
@@ -3822,6 +3862,27 @@ export default function App() {
     }
   }
 
+  if (isStandbyActive) {
+    return (
+      <StandbyScreen
+        companyProfile={company}
+        currentUser={currentUser}
+        onStartNewSale={() => {
+          setIsStandbyActive(false);
+          setActiveTab("sale");
+        }}
+        onLogout={handleLogout}
+        isCashRegisterOpen={!!cashRegister.currentSession}
+        onOpenCashRegister={() => {
+          setIsStandbyActive(false);
+          setActiveTab("sale");
+        }}
+        pendingSalesCount={sales.filter((s) => s.balanceDue > 0).length}
+        todaysDeliveriesCount={todaysDeliveries.length}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-brand-dark-navy text-slate-100 flex flex-col justify-between">
       
@@ -3882,6 +3943,7 @@ export default function App() {
         companyLogo={company.logo}
         currentUser={currentUser}
         onLogout={handleLogout}
+        onOpenStandby={() => setIsStandbyActive(true)}
         dailyMetaGoal={todayEffectiveGoal}
         todayNetProfitLive={todayNetProfitLive}
         hideMetaValues={hideMetaValues}

@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutDashboard, Building2, TrendingDown, LogOut, User as UserIcon, Cloud, CloudOff, Users, BarChart3, Boxes, Calculator, Clock, Calendar, Fingerprint, Package, Lock, Bell, Trash2, Check, X, Search, ShieldAlert, Trophy, Wallet, RefreshCw, Sun, Moon, Headphones } from "lucide-react";
+import { ClipboardList, LayoutDashboard, Building2, TrendingDown, LogOut, User as UserIcon, Cloud, CloudOff, Users, BarChart3, Boxes, Calculator, Clock, Calendar, Fingerprint, Package, Lock, Bell, Trash2, Check, X, Search, ShieldAlert, Trophy, Wallet, RefreshCw, Sun, Moon, Headphones, Coffee, Maximize, Minimize } from "lucide-react";
 import React from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { User } from "../types";
@@ -30,6 +30,7 @@ interface HeaderProps {
   isCashRegisterOpen?: boolean;
   onCashRegisterClick?: () => void;
   dbSyncing?: boolean;
+  onOpenStandby?: () => void;
 }
 
 export function Header({ 
@@ -54,9 +55,34 @@ export function Header({
   onMetasSemanaClick,
   isCashRegisterOpen = false,
   onCashRegisterClick,
-  dbSyncing = false
+  dbSyncing = false,
+  onOpenStandby
 }: HeaderProps) {
   const isGeneralAdmin = currentUser?.email === "sistemadevendaadm@gmail.com" || currentUser?.email === "sistemavendaadm@gmail.com" || currentUser?.email === "vendas.impactodigital2@gmail.com";
+
+  const [isFullscreen, setIsFullscreen] = React.useState(!!document.fullscreenElement);
+
+  React.useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch((err) => {
+        console.error("Error attempting to enable fullscreen:", err);
+      });
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch((err) => {
+          console.error("Error attempting to exit fullscreen:", err);
+        });
+      }
+    }
+  };
 
   const [unansweredSupportCount, setUnansweredSupportCount] = React.useState(0);
 
@@ -269,6 +295,18 @@ export function Header({
         <div className="flex flex-col lg:flex-row items-center justify-between gap-3 w-full">
           {/* Menu Navigation container */}
           <div className="flex flex-wrap bg-slate-900/60 p-1 rounded-xl border border-slate-800 self-stretch sm:self-auto gap-1">
+            {onOpenStandby && (
+              <button
+                type="button"
+                onClick={onOpenStandby}
+                className="flex-grow sm:flex-grow-0 flex items-center justify-center gap-2 px-3 py-1.5 text-xs font-extrabold rounded-lg transition-all duration-200 cursor-pointer whitespace-nowrap bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 border border-emerald-500/30 hover:scale-[1.02] shadow-sm"
+                title="Voltar para a Tela de Início / Standby"
+              >
+                <Coffee className="h-4 w-4 text-emerald-400 animate-pulse" />
+                <span>Tela de Descanso</span>
+              </button>
+            )}
+
             <button
               onClick={() => handleTabClick("sale", "Acesso à Nova Venda liberado por padrão.")}
               className={`flex-grow sm:flex-grow-0 flex items-center justify-center gap-2 px-3 py-1.5 text-xs font-bold rounded-lg transition-all duration-200 cursor-pointer whitespace-nowrap ${
@@ -515,6 +553,23 @@ export function Header({
   </button>
 )}
 
+
+              <button
+                type="button"
+                onClick={toggleFullscreen}
+                className={`p-2 rounded-xl active:scale-95 transition-all cursor-pointer border shadow-sm ${
+                  isFullscreen
+                    ? "bg-brand-cyan/20 text-brand-cyan border-brand-cyan/40"
+                    : "text-slate-400 hover:text-brand-cyan hover:bg-brand-cyan/10 border-transparent hover:border-brand-cyan/20"
+                }`}
+                title={isFullscreen ? "Sair do Modo Tela Cheia (Esc)" : "Ativar Modo Tela Cheia (Full Screen)"}
+              >
+                {isFullscreen ? (
+                  <Minimize className="h-4.5 w-4.5" />
+                ) : (
+                  <Maximize className="h-4.5 w-4.5" />
+                )}
+              </button>
 
               <button
                 type="button"
