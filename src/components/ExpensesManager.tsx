@@ -20,7 +20,7 @@ import {
   Loader2,
   AlertTriangle
 } from "lucide-react";
-import { Expense, Sale, getSaleOperationCost, CashRegisterState } from "../types";
+import { Expense, Sale, getSaleOperationCost, CashRegisterState, User } from "../types";
 import { MonthlyBill } from "./MonthlyExpensesMeta";
 import {
   BarChart,
@@ -45,6 +45,8 @@ interface ExpensesManagerProps {
   daysWorked?: number;
   cashRegister?: CashRegisterState;
   onRequestOpenRegister?: () => void;
+  currentUser?: User | null;
+  adminUnlocked?: boolean;
 }
 
 const CATEGORY_COLORS: { [key: string]: string } = {
@@ -160,7 +162,12 @@ const getSaleOrderDate = (sale: Sale): string => {
   return sale.date;
 };
 
-export function ExpensesManager({ expenses, onAddExpense, onDeleteExpense, sales, bills = [], daysWorked = 1, cashRegister, onRequestOpenRegister }: ExpensesManagerProps) {
+export function ExpensesManager({ expenses, onAddExpense, onDeleteExpense, sales, bills = [], daysWorked = 1, cashRegister, onRequestOpenRegister, currentUser, adminUnlocked }: ExpensesManagerProps) {
+  const isAttendant = currentUser && (
+    currentUser.role === "atendente" ||
+    currentUser.role === "seller" ||
+    (currentUser.owner_id && currentUser.owner_id !== currentUser.id && currentUser.role !== "administrador" && !currentUser.is_admin)
+  ) && !adminUnlocked;
   // Expense registration form state
   const [description, setDescription] = useState("");
   const [value, setValue] = useState("");
@@ -827,29 +834,35 @@ export function ExpensesManager({ expenses, onAddExpense, onDeleteExpense, sales
   return (
     <div className="space-y-6">
       
-      {/* 1. Header with analytic summary trigger */}
+      {/* 1. Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-bold text-white flex items-center gap-2">
             <TrendingDown className="h-5 w-5 text-red-500" />
-            <span>Gestão de Gastos e Despesas</span>
+            <span>{isAttendant ? "Lançamento de Despesas e Sangrias" : "Gestão de Gastos e Despesas"}</span>
           </h2>
           <p className="text-xs text-slate-400">
-            Cadastre os gastos fixos ou variáveis da sua empresa para ter um cálculo real de lucros.
+            {isAttendant 
+              ? "Cadastre compras de materiais do balcão ou retiradas (sangrias) do dinheiro do caixa de forma simplificada."
+              : "Cadastre os gastos fixos ou variáveis da sua empresa para ter um cálculo real de lucros."
+            }
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setShowLargeReport(true)}
-          className="flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer shadow-lg shadow-red-950/40 transform hover:scale-[1.02]"
-        >
-          <BarChart3 className="h-4 w-4" />
-          <span>RELATÓRIO DE GASTOS COM GRÁFICO</span>
-        </button>
+        {!isAttendant && (
+          <button
+            type="button"
+            onClick={() => setShowLargeReport(true)}
+            className="flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer shadow-lg shadow-red-950/40 transform hover:scale-[1.02]"
+          >
+            <BarChart3 className="h-4 w-4" />
+            <span>RELATÓRIO DE GASTOS COM GRÁFICO</span>
+          </button>
+        )}
       </div>
 
-      {/* 2. Top-level inline stats overview config */}
+      {/* 2. Top-level inline stats overview config (Owner/Admin only) */}
+      {!isAttendant && (
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         {/* Total cadastrado (Standalone/Manuais) */}
         <div 
@@ -1056,6 +1069,7 @@ export function ExpensesManager({ expenses, onAddExpense, onDeleteExpense, sales
           </div>
         </div>
       </div>
+      )}
 
       {/* 3. Panel splits: Form registration on left, fast list on right */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

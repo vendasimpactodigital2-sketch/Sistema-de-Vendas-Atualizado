@@ -138,7 +138,11 @@ export function Header({
   const isGoalReached = dailyMetaGoal > 0 && todayNetProfitLive >= dailyMetaGoal;
   const isNearGoal = dailyMetaGoal > 0 && !isGoalReached && progressPercent >= 90;
 
-  const isAttendant = currentUser && currentUser.owner_id && currentUser.owner_id !== currentUser.id;
+  const isAttendant = currentUser && (
+    currentUser.role === "atendente" ||
+    currentUser.role === "seller" ||
+    (currentUser.owner_id && currentUser.owner_id !== currentUser.id && currentUser.role !== "administrador" && !currentUser.is_admin)
+  );
 
   // Reminders state & sync
   const [reminders, setReminders] = React.useState<any[]>(() => {
@@ -318,6 +322,37 @@ export function Header({
               <ClipboardList className="h-4 w-4" />
               <span>Nova Venda</span>
             </button>
+
+            {/* Employee Quick Access Buttons */}
+            {isAttendant && !adminUnlocked && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("gastos")}
+                  className={`flex-grow sm:flex-grow-0 flex items-center justify-center gap-2 px-3 py-1.5 text-xs font-bold rounded-lg transition-all duration-200 cursor-pointer whitespace-nowrap ${
+                    activeTab === "gastos"
+                      ? "bg-gradient-to-r from-red-500 to-red-600 text-white shadow-lg shadow-red-500/25 border border-red-500/20"
+                      : "text-slate-300 hover:text-white hover:bg-slate-800/60 bg-slate-900/80 border border-slate-800"
+                  }`}
+                  title="Lançar compra de loja ou retirada/sangria do dinheiro do caixa"
+                >
+                  <TrendingDown className="h-4 w-4 text-red-400" />
+                  <span>Lançar Despesa / Sangria</span>
+                </button>
+
+                {onCashRegisterClick && (
+                  <button
+                    type="button"
+                    onClick={onCashRegisterClick}
+                    className="flex-grow sm:flex-grow-0 flex items-center justify-center gap-2 px-3 py-1.5 text-xs font-bold rounded-lg transition-all duration-200 cursor-pointer whitespace-nowrap bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/35 shadow-sm"
+                    title="Abertura e Fechamento de Caixa do Turno"
+                  >
+                    <Wallet className="h-4 w-4 text-emerald-400" />
+                    <span>{isCashRegisterOpen ? "Caixa (Fechar Turno)" : "Abrir Caixa"}</span>
+                  </button>
+                )}
+              </>
+            )}
             
             {(!isAttendant || adminUnlocked) && (
               <>

@@ -302,7 +302,11 @@ export default function App() {
   const [adminUnlockSuccessCallback, setAdminUnlockSuccessCallback] = useState<{ fn: () => void } | null>(null);
   const [adminUnlockMessage, setAdminUnlockMessage] = useState("");
 
-  const isAttendant = currentUser && currentUser.owner_id && currentUser.owner_id !== currentUser.id && currentUser.role !== "administrador";
+  const isAttendant = currentUser && (
+    currentUser.role === "atendente" ||
+    currentUser.role === "seller" ||
+    (currentUser.owner_id && currentUser.owner_id !== currentUser.id && currentUser.role !== "administrador" && !currentUser.is_admin)
+  );
 
   const requestAdminUnlock = (callback: () => void, message?: string) => {
     if (!isAttendant || adminUnlocked) {
@@ -395,6 +399,14 @@ export default function App() {
 
 
   const [activeTab, setActiveTab] = useState<"sale" | "dashboard" | "company" | "gastos" | "usuarios" | "relatorios" | "produtos" | "gastosMeta" | "clientes" | "suporte">("sale");
+
+  // Hard protection: redirect attendants away from management tabs if admin mode is not unlocked
+  useEffect(() => {
+    const restrictedTabs = ["dashboard", "company", "usuarios", "relatorios", "gastosMeta", "produtos", "clientes", "suporte"];
+    if (isAttendant && !adminUnlocked && restrictedTabs.includes(activeTab)) {
+      setActiveTab("sale");
+    }
+  }, [isAttendant, adminUnlocked, activeTab]);
   const [isStandbyActive, setIsStandbyActive] = useState<boolean>(true);
 
   // Auto-Standby after 10 minutes (600,000ms) of user inactivity
@@ -1539,6 +1551,7 @@ export default function App() {
           const remote = dataResults[registerPromiseIdx];
           if (remote) {
             setCashRegister(remote);
+            setIsGlobalRegisterOpen(!!remote?.currentSession && remote.currentSession.status === "aberto");
             localStorage.setItem("NUCLEO_CASH_REGISTER", JSON.stringify(remote));
 
             // Persist the synced date we stored as pending
@@ -1565,13 +1578,8 @@ export default function App() {
         }
       }
 
-      // 4. Update the global register open status state
-      if (isBackground) {
-        // Safe instant local check in background to avoid extra remote query
-        setIsGlobalRegisterOpen(!!cashRegister?.currentSession && cashRegister.currentSession.status === "aberto");
-      } else {
-        await checkGlobalRegisterStatus(activeUser.id);
-      }
+      // 4. Update the global register open status state from database or active state
+      await checkGlobalRegisterStatus(companyOwnerId);
 
       console.log(`Supabase remote sync completed successfully! (${isBackground ? "background" : "foreground"})`);
 
@@ -1612,135 +1620,10 @@ export default function App() {
     };
   }, [currentUser]);
 
-  // Automatic cash register auto-closing when the day turns (at 00:00 or when first loaded the next day)
+  // Automatic cash register auto-closing COMPLETELY DISABLED: Cash register stays open until manually closed by user
   useEffect(() => {
-    if (!cashRegister?.currentSession) return;
-
-    const checkAndAutoCloseDayTurn = async () => {
-      const currentSession = cashRegister.currentSession;
-      if (!currentSession || currentSession.status !== "aberto") return;
-
-      const sessionDateStr = getLocalDateFromISO(currentSession.dataAbertura);
-      
-      // Get current local date in YYYY-MM-DD
-      const now = new Date();
-      const year = now.getFullYear();
-      const month = String(now.getMonth() + 1).padStart(2, "0");
-      const day = String(now.getDate()).padStart(2, "0");
-      const todayDateStr = `${year}-${month}-${day}`;
-
-      if (sessionDateStr && todayDateStr && sessionDateStr !== todayDateStr) {
-        console.log(`[Auto-Close] O dia virou! Fechando caixa anterior de ${sessionDateStr} automaticamente (Hoje: ${todayDateStr})`);
-
-        let cashInflow = 0;
-        let totalPixInflow = 0;
-        let totalCardInflow = 0;
-        let totalSalesInSession = 0;
-        let salesCount = 0;
-        let operationCosts = 0;
-        let totalMotoboy = 0;
-
-        const openTime = new Date(currentSession.dataAbertura).getTime();
-        const openTimeYMD = currentSession.dataAbertura.slice(0, 10);
-
-        sales.forEach((sale) => {
-          if (sale.isBudget) return;
-          const saleTime = new Date(sale.date || new Date().toISOString()).getTime();
-          const isSaleInSession = saleTime >= openTime;
-          if (isSaleInSession) {
-            salesCount++;
-            totalSalesInSession += sale.totalValue;
-            operationCosts += getSaleOperationCost(sale);
-            totalMotoboy += Number(sale.motoboyCost || 0);
-          }
-          if (sale.payments && sale.payments.length > 0) {
-            sale.payments.forEach((p) => {
-              const amt = Number(p.amount) || 0;
-              const method = String(p.method || "dinheiro").toLowerCase();
-              const paymentTime = new Date(p.date || sale.date || new Date().toISOString()).getTime();
-              if (paymentTime >= openTime) {
-                if (method === "dinheiro") cashInflow += amt;
-                else if (method === "pix") totalPixInflow += amt;
-                else totalCardInflow += amt;
-              }
-            });
-          } else {
-            if (isSaleInSession) {
-              const meth = String(sale.paymentMethod || "dinheiro").toLowerCase();
-              const amt = sale.balanceDue === 0 ? sale.totalValue : (sale.downPayment || 0);
-              if (meth === "dinheiro") cashInflow += amt;
-              else if (meth === "pix") totalPixInflow += amt;
-              else totalCardInflow += amt;
-            }
-          }
-        });
-
-        // Sum standalone expenses created during active session
-        let expensesTotal = 0;
-        expenses.forEach((expense) => {
-          if (!expense.date) return;
-          const isISO = expense.date.includes("T") || expense.date.includes("Z");
-          if (isISO) {
-            const expTime = new Date(expense.date).getTime();
-            if (expTime >= openTime) {
-              expensesTotal += Number(expense.value) || 0;
-            }
-          } else {
-            if (expense.date >= openTimeYMD) {
-              expensesTotal += Number(expense.value) || 0;
-            }
-          }
-        });
-
-        const totalCustos = operationCosts + expensesTotal + totalMotoboy;
-        const expected = currentSession.valorAbertura + cashInflow - totalCustos;
-        const totalEntradas = cashInflow + totalPixInflow + totalCardInflow;
-
-        const observations = `🔒 FECHAMENTO AUTOMÁTICO DE VIRADA DE DIA (00:00)\n\n` +
-          `O caixa aberto no dia ${sessionDateStr} foi fechado automaticamente pelo sistema de forma autônoma devido à virada de dia para ${todayDateStr}.\n` +
-          `• Saldo de Abertura: R$ ${currentSession.valorAbertura.toFixed(2)}\n` +
-          `• Dinheiro Líquido Esperado na Gaveta: R$ ${expected.toFixed(2)}\n` +
-          `• Recursos via PIX: R$ ${totalPixInflow.toFixed(2)}\n` +
-          `• Recursos via Cartão: R$ ${totalCardInflow.toFixed(2)}\n` +
-          `• Total Entradas no Turno: R$ ${totalEntradas.toFixed(2)}`;
-
-        const closedSession: CashRegisterSession = {
-          ...currentSession,
-          status: "fechado",
-          valorFechamentoEsperado: expected,
-          valorFechamentoReal: expected,
-          dataFechamento: new Date().toISOString(),
-          observacoes: observations
-        };
-
-        const updatedState: CashRegisterState = {
-          currentSession: null,
-          history: [closedSession, ...cashRegister.history]
-        };
-
-        setCashRegister(updatedState);
-        localStorage.setItem("NUCLEO_CASH_REGISTER", JSON.stringify(updatedState));
-        setIsGlobalRegisterOpen(false);
-
-        try { playCloseRegisterSound(); } catch (soundErr) { console.warn(soundErr); }
-
-        if (currentUser && isSupabaseConfigured()) {
-          const companyId = currentUser.owner_id || currentUser.id;
-          await dbSaveCashRegister(companyId, updatedState);
-          await dbCloseGlobalCashRegister(companyId, currentSession.id, closedSession);
-        }
-
-        addToast(`🔒 O caixa anterior (${sessionDateStr}) foi fechado automaticamente devido à virada de dia!`, "success");
-      }
-    };
-
-    // Run check initially and also check periodically in case the day changes while the user is active
-    checkAndAutoCloseDayTurn();
-    const dayTurnInterval = setInterval(checkAndAutoCloseDayTurn, 5000);
-    return () => {
-      clearInterval(dayTurnInterval);
-    };
-  }, [cashRegister, currentUser, sales, expenses]);
+    // Intentionally left empty - cash register must remain open once opened until manual closure
+  }, []);
 
   // Reactive real-time websocket subscription channels for instant instant-sync on event notification
   useEffect(() => {
@@ -1771,12 +1654,14 @@ export default function App() {
               const remoteState = (payload.new as any).items as any;
               if (remoteState && typeof remoteState === "object") {
                 console.log("Real-time Cash Register update received from another PC! Updating state instantly...", remoteState);
+                const isOpen = !!remoteState?.currentSession && remoteState.currentSession.status === "aberto";
                 setCashRegister(remoteState);
+                setIsGlobalRegisterOpen(isOpen);
                 localStorage.setItem("NUCLEO_CASH_REGISTER", JSON.stringify(remoteState));
                 if ((payload.new as any).date) {
                   localStorage.setItem("NUCLEO_LAST_CASH_REGISTER_SYNCED_DATE", (payload.new as any).date);
                 }
-                addToast("🔄 Caixa atualizado em tempo real por ações em outro dispositivo!", "info");
+                addToast(isOpen ? "🔓 Caixa aberto em outro dispositivo!" : "🔒 Caixa fechado em outro dispositivo!", "info");
                 return; // skip full triggerRemoteSync for this event since we already handled it instantly!
               }
             } catch (err) {
@@ -4227,6 +4112,8 @@ export default function App() {
                       setActiveTab("sale");
                       setShowCashRegisterModal(true);
                     }}
+                    currentUser={currentUser}
+                    adminUnlocked={adminUnlocked}
                   />
                 </React.Suspense>
               ) : activeTab === "gastosMeta" ? (
@@ -5574,6 +5461,8 @@ export default function App() {
         activeOperatorName={currentUser?.name || ""}
         onOpenRegister={handleOpenRegister}
         onCloseRegister={handleCloseRegister}
+        currentUser={currentUser}
+        adminUnlocked={adminUnlocked}
       />
 
       {/* Weekday goal indicator checklist overview dashboard */}

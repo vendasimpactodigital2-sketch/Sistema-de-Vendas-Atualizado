@@ -2008,55 +2008,29 @@ export async function dbCheckGlobalCashRegister(userId: string): Promise<boolean
   if (!supabase) return false;
 
   try {
-    const today = new Date();
-    const yyyy = today.getFullYear();
-    const mm = String(today.getMonth() + 1).padStart(2, '0');
-    const dd = String(today.getDate()).padStart(2, '0');
-    const todayStr = `${yyyy}-${mm}-${dd}`;
+    // 1. Primary check: fetch canonical cash register state from sales table
+    const state = await dbGetCashRegister(userId);
+    if (state?.currentSession && state.currentSession.status === "aberto") {
+      console.log(`[dbCheckGlobalCashRegister] Open session active in cash_register_state for user ${userId}`);
+      return true;
+    }
 
-    // Try various possible table names to support the exact user table
+    // 2. Secondary fallback: check legacy or auxiliary tables if configured
     const tableNames = ["fluxo_caixa", "fluxo_de_caixa", "fluxo_caixas", "fluxo_de_caixas"];
     for (const tableName of tableNames) {
       try {
         const { data, error } = await supabase
           .from(tableName)
-          .select("*")
-          .eq("user_id", userId)
-          .eq("status", "aberto")
-          .or(`data.eq.${todayStr},data_abertura.eq.${todayStr},data_abertura.like.${todayStr}%`);
-
-        if (!error && data && data.length > 0) {
-          console.log(`[dbCheckGlobalCashRegister] Open session found in ${tableName} for user ${userId} on date ${todayStr}`);
-          return true;
-        }
-      } catch (err) {
-        // Continue searching other names
-      }
-    }
-
-    // Secondary fallback: query by today's date and status only, ignoring column format constraints
-    for (const tableName of tableNames) {
-      try {
-        const { data, error } = await supabase
-          .from(tableName)
-          .select("*")
+          .select("status")
           .eq("user_id", userId)
           .eq("status", "aberto");
 
         if (!error && data && data.length > 0) {
-          // Client-side date comparison to be fully reliable if DB column type is timestamptz
-          const matched = data.some((row: any) => {
-            const rowDateVal = row.data || row.data_abertura || row.created_at || "";
-            if (!rowDateVal) return false;
-            return rowDateVal.toString().startsWith(todayStr);
-          });
-          if (matched) {
-            console.log(`[dbCheckGlobalCashRegister] Open session found in ${tableName} via manual client filter.`);
-            return true;
-          }
+          console.log(`[dbCheckGlobalCashRegister] Open session found in secondary table ${tableName}`);
+          return true;
         }
       } catch (err) {
-        // Ignore
+        // Continue
       }
     }
 

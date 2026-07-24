@@ -11,6 +11,8 @@ interface CashRegisterModalProps {
   activeOperatorName: string;
   onOpenRegister: (valorAbertura: number, operador: string) => void;
   onCloseRegister: (valorFechamentoReal: number, observacoes: string) => void;
+  currentUser?: any;
+  adminUnlocked?: boolean;
 }
 
 const getLocalDateFromISO = (isoStr: string): string => {
@@ -46,8 +48,15 @@ export function CashRegisterModal({
   expenses,
   activeOperatorName,
   onOpenRegister,
-  onCloseRegister
+  onCloseRegister,
+  currentUser,
+  adminUnlocked
 }: CashRegisterModalProps) {
+  const isAttendant = currentUser && (
+    currentUser.role === "atendente" ||
+    currentUser.role === "seller" ||
+    (currentUser.owner_id && currentUser.owner_id !== currentUser.id && currentUser.role !== "administrador" && !currentUser.is_admin)
+  ) && !adminUnlocked;
   // Opening states
   const [openCashInput, setOpenCashInput] = useState<string>("100.00");
   const [operatorInput, setOperatorInput] = useState<string>(activeOperatorName || "");
@@ -275,6 +284,7 @@ export function CashRegisterModal({
   }, [cashRegister.currentSession, sales, expenses]);
 
   const renderHistorySection = () => {
+    if (isAttendant) return null;
     const history = cashRegister.history || [];
     if (history.length === 0) return null;
 
