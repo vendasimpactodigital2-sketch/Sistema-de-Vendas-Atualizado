@@ -770,6 +770,11 @@ export default function App() {
     return { currentSession: null, history: [] };
   });
 
+  const cashRegisterRef = useRef<CashRegisterState>(cashRegister);
+  useEffect(() => {
+    cashRegisterRef.current = cashRegister;
+  }, [cashRegister]);
+
   const [bypassTodayClosure, setBypassTodayClosure] = useState<boolean>(false);
 
   // Computed checks to enforce mandatory single daily cash register turns
@@ -1653,15 +1658,27 @@ export default function App() {
             try {
               const remoteState = (payload.new as any).items as any;
               if (remoteState && typeof remoteState === "object") {
-                console.log("Real-time Cash Register update received from another PC! Updating state instantly...", remoteState);
-                const isOpen = !!remoteState?.currentSession && remoteState.currentSession.status === "aberto";
+                const remoteIsOpen = !!remoteState?.currentSession && remoteState.currentSession.status === "aberto";
+                const localIsOpen = !!cashRegisterRef.current?.currentSession && cashRegisterRef.current.currentSession.status === "aberto";
+
+                if (remoteIsOpen !== localIsOpen) {
+                  console.warn(
+                    `[Realtime Cash Register Discrepancy Detected]\n` +
+                    `• Local State: ${localIsOpen ? "ABERTO" : "FECHADO"} | Remote Realtime State: ${remoteIsOpen ? "ABERTO" : "FECHADO"}\n` +
+                    `• Local Session ID: ${cashRegisterRef.current?.currentSession?.id || "Nenhuma"} (Abertura: ${cashRegisterRef.current?.currentSession?.dataAbertura || "N/A"})\n` +
+                    `• Remote Session ID: ${remoteState?.currentSession?.id || "Nenhuma"} (Abertura: ${remoteState?.currentSession?.dataAbertura || "N/A"})`
+                  );
+                } else {
+                  console.log("[Realtime Cash Register Sync] Payload received matches local open status:", remoteState);
+                }
+
                 setCashRegister(remoteState);
-                setIsGlobalRegisterOpen(isOpen);
+                setIsGlobalRegisterOpen(remoteIsOpen);
                 localStorage.setItem("NUCLEO_CASH_REGISTER", JSON.stringify(remoteState));
                 if ((payload.new as any).date) {
                   localStorage.setItem("NUCLEO_LAST_CASH_REGISTER_SYNCED_DATE", (payload.new as any).date);
                 }
-                addToast(isOpen ? "🔓 Caixa aberto em outro dispositivo!" : "🔒 Caixa fechado em outro dispositivo!", "info");
+                addToast(remoteIsOpen ? "🔓 Caixa aberto em outro dispositivo!" : "🔒 Caixa fechado em outro dispositivo!", "info");
                 return; // skip full triggerRemoteSync for this event since we already handled it instantly!
               }
             } catch (err) {
