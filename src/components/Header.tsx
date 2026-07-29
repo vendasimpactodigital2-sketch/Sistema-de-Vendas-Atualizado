@@ -847,10 +847,10 @@ export function Header({
               type="button"
               onClick={onLocateClientClick}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 active:scale-95 transition-all duration-200 cursor-pointer shadow-md border border-cyan-400/20 shrink-0 h-9"
-              title="Localizar Cliente"
+              title="Buscar Cliente & Histórico de Pedidos"
             >
               <Search className="h-3.5 w-3.5 shrink-0" />
-              <span>Localizar Cliente</span>
+              <span>Buscar Cliente & Pedidos</span>
             </button>
           )}
 

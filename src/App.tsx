@@ -9,6 +9,7 @@ import { SaleForm } from "./components/SaleForm";
 import { SalesHistory } from "./components/SalesHistory";
 import { DashboardCharts } from "./components/DashboardCharts";
 import { PendingSalesModal } from "./components/PendingSalesModal";
+import { ClientSearchModal } from "./components/ClientSearchModal";
 import { MonthlyBill } from "./components/MonthlyExpensesMeta";
 
 const CompanySettings = React.lazy(() => import("./components/CompanySettings").then(m => ({ default: m.CompanySettings })));
@@ -497,6 +498,7 @@ export default function App() {
 
   const [catalogProducts, setCatalogProducts] = useState<CatalogProduct[]>([]);
   const [locateClientClicks, setLocateClientClicks] = useState(0);
+  const [showClientSearchModal, setShowClientSearchModal] = useState(false);
   
   // Load sales data immediately from localStorage on mount
   const [sales, setSales] = useState<Sale[]>(() => {
@@ -3874,8 +3876,7 @@ export default function App() {
           addToast("🔒 Direitos de Administrador bloqueados novamente.", "info");
         }}
         onLocateClientClick={() => {
-          handleSwitchTab("clientes");
-          setLocateClientClicks((prev) => prev + 1);
+          setShowClientSearchModal(true);
         }}
         pendingSalesCount={sales.filter((s) => {
           return !s.isBudget && 
@@ -4287,6 +4288,22 @@ export default function App() {
         company={company}
         onEditSale={handleEditSale}
         onDeleteSale={handleDeleteSale}
+      />
+
+      {/* Modal for Client Search & Complete Order / Notinha History */}
+      <ClientSearchModal
+        isOpen={showClientSearchModal}
+        onClose={() => setShowClientSearchModal(false)}
+        sales={sales}
+        budgets={budgets}
+        company={company}
+        onNewOrderWithClient={(clientName, clientPhone) => {
+          setPreselectedClient({ name: clientName, phone: clientPhone });
+          handleSwitchTab("sale");
+          addToast(`Cliente "${clientName}" selecionado para novo pedido!`, "success");
+        }}
+        onEditSale={handleEditSale}
+        onSaveSale={handleSaleSaved}
       />
 
       {/* Interactive prompt to suggest registering daily goal on login */}
