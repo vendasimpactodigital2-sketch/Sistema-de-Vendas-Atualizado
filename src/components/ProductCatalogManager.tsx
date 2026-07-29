@@ -634,10 +634,6 @@ export function ProductCatalogManager({
               ? "border-brand-magenta ring-1 ring-brand-magenta/30 shadow-[0_0_15px_rgba(255,0,127,0.15)]" 
               : "border-slate-800 shadow-lg shadow-black/20"
           }`}>
-            <div className="absolute top-0 right-0 py-1 px-3 bg-brand-magenta/10 text-brand-magenta text-[10px] font-bold uppercase rounded-bl-xl border-l border-b border-slate-800 tracking-wider">
-              {editingId ? "Edição" : "Cadastro"}
-            </div>
-
             <h2 className="text-lg font-bold text-white mb-5 flex items-center gap-2">
               <span className={`h-5 w-1.5 rounded transition-all ${editingId ? "bg-brand-magenta animate-pulse" : "bg-brand-magenta"}`}></span>
               {editingId ? "Editar Produto" : "Novo Produto / Serviço"}

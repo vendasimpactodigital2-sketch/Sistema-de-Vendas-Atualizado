@@ -1807,10 +1807,6 @@ export function SaleForm({
           
           {/* Section 1: Client Metadata */}
           <div className="bg-brand-card border border-slate-800 rounded-xl p-4 relative">
-            <div className="absolute top-0 right-0 py-0.5 px-2.5 bg-brand-magenta/10 text-brand-magenta text-[9px] font-black uppercase rounded-bl-lg border-l border-b border-slate-800 tracking-wider">
-              1. Identificação
-            </div>
-            
             <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
               <h2 className="text-xs font-black text-slate-100 uppercase tracking-widest flex items-center gap-1.5">
                 <span className="h-4.5 w-1 rounded bg-brand-magenta"></span>
@@ -1969,10 +1965,6 @@ export function SaleForm({
 
           {/* Section 2: Products & Line Items Table */}
           <div className="bg-brand-card border border-slate-800 rounded-2xl p-6 relative">
-            <div className="absolute top-0 right-0 py-1 px-3 bg-brand-cyan/10 text-brand-cyan text-[10px] font-bold uppercase rounded-bl-xl border-l border-b border-slate-800 tracking-wider">
-              2. Itens do Pedido
-            </div>
-
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-bold text-white flex items-center gap-2">
                 <span className="h-5 w-1.5 rounded bg-brand-cyan"></span>
@@ -2145,10 +2137,6 @@ export function SaleForm({
 
           {/* Section 3: Vendas Rápidas */}
           <div className="bg-brand-card border border-slate-800 rounded-2xl p-6 relative">
-            <div className="absolute top-0 right-0 py-1 px-3 bg-brand-magenta/10 text-brand-magenta text-[10px] font-bold uppercase rounded-bl-xl border-l border-b border-slate-800 tracking-wider">
-              3. Vendas Rápidas
-            </div>
-            
             <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
               <h2 className="text-lg font-bold text-white flex items-center gap-2">
                 <span className="h-5 w-1.5 rounded bg-brand-magenta"></span>

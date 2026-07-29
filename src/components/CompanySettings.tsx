@@ -1058,10 +1058,6 @@ export function CompanySettings({
 
   return (
     <div className="bg-brand-card border border-slate-800 rounded-2xl p-6 space-y-6 relative">
-      <div className="absolute top-0 right-0 py-1 px-3 bg-brand-magenta/10 text-brand-magenta text-[10px] font-bold uppercase rounded-bl-xl border-l border-b border-slate-800 tracking-wider">
-        Painel de Registro
-      </div>
-
       {/* 💵 SEÇÃO DE ABERTURA DO CAIXA */}
       <div className="bg-slate-950/40 border border-slate-800 rounded-xl p-5 space-y-4">
         <div>
