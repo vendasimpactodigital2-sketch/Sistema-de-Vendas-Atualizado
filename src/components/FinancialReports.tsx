@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Sale, Expense, CompanyProfile, getSaleOrderDate, getSaleOperationCost, CashRegisterState, CashRegisterSession } from "../types";
+import { Sale, Expense, CompanyProfile, getSaleOrderDate, getSaleOperationCost, CashRegisterState, CashRegisterSession, isQuickSaleClient } from "../types";
 import {
   Calendar,
   FileDown,
@@ -159,7 +159,7 @@ export function FinancialReports({ sales, expenses, company, cashRegister }: Fin
     return filteredSales.reduce((acc, s) => acc + s.totalValue, 0);
   }, [filteredSales]);
   const totalSinalRecebido = totalRevenuePaid; // signal received matches total revenues paid in period
-  const totalSaldoDevedor = sales.filter((s) => !s.isBudget).reduce((acc, s) => acc + s.balanceDue, 0); // Cumulative outstanding balance of all sales
+  const totalSaldoDevedor = sales.filter((s) => !s.isBudget && !isQuickSaleClient(s.clientName)).reduce((acc, s) => acc + (s.balanceDue || 0), 0); // Cumulative outstanding balance of identified client sales
   
   const totalDescontoConcedido = React.useMemo(() => {
     return sales

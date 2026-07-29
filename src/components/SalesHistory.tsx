@@ -20,7 +20,7 @@ import {
   AlertTriangle
 } from "lucide-react";
 import React, { useState } from "react";
-import { Sale, CompanyProfile, getSaleOrderDate } from "../types";
+import { Sale, CompanyProfile, getSaleOrderDate, isQuickSaleClient } from "../types";
 import { jsPDF } from "jspdf";
 import { motion, AnimatePresence } from "motion/react";
 import { parseClientImages } from "../supabase";
@@ -229,9 +229,11 @@ export function SalesHistory({
 
     // 2. Status filtering (separating paid/baixas and pending)
     if (activeStatusFilter === "pending") {
-      if (sale.balanceDue <= 0) return false;
+      if (sale.isBudget) return false;
+      if (isQuickSaleClient(sale.clientName)) return false;
+      if ((sale.balanceDue || 0) <= 0.001 && sale.materialEntregue) return false;
     } else if (activeStatusFilter === "paid") {
-      if (sale.balanceDue > 0) return false;
+      if ((sale.balanceDue || 0) > 0.001) return false;
     }
 
     // 3. Temporal/Date filtering

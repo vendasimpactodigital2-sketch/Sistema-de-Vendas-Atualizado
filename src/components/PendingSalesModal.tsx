@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { X, Search, DollarSign, HandCoins, Printer, MessageCircle, AlertCircle, Calendar, Clock, Check, Coins, Phone, Edit2, Trash2 } from "lucide-react";
-import { Sale, CompanyProfile } from "../types";
+import { Sale, CompanyProfile, isQuickSaleClient } from "../types";
 import { jsPDF } from "jspdf";
 import { parseClientImages } from "../supabase";
 
@@ -122,24 +122,30 @@ export function PendingSalesModal({ isOpen, onClose, sales, onSaveSale, company,
   const localDate = new Date();
   const todayStr = `${localDate.getFullYear()}-${String(localDate.getMonth() + 1).padStart(2, '0')}-${String(localDate.getDate()).padStart(2, '0')}`;
 
-  // Filter sales that are not yet delivered/withdrawn
+  // Filter sales that are pending payment clearance ("dar baixa")
+  // Exclude quick sales ("Venda Rápida") without identified client and sales that already gave baixa (balanceDue <= 0)
   const pendingSales = sales.filter((sale) => {
-    const hasValidFutureOrTodayDelivery = sale.deliveryDate && sale.deliveryDate !== "Sem data informada" && sale.deliveryDate >= todayStr;
     const isPending = !sale.isBudget && 
-                      (sale.materialEntregue === false || !sale.materialEntregue) && 
-                      (sale.balanceDue > 0 || hasValidFutureOrTodayDelivery);
-    const matchesSearch = 
-      sale.clientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      sale.clientPhone.replace(/\D/g, "").includes(searchTerm.replace(/\D/g, ""));
+                      !isQuickSaleClient(sale.clientName) && 
+                      (sale.balanceDue || 0) > 0.001;
+
+    const clientName = (sale.clientName || "").toLowerCase();
+    const clientPhone = (sale.clientPhone || "").replace(/\D/g, "");
+    const searchClean = (searchTerm || "").trim().toLowerCase();
+    const searchDigits = (searchTerm || "").replace(/\D/g, "");
+
+    const matchesSearch = !searchClean || 
+      clientName.includes(searchClean) || 
+      (searchDigits.length > 0 && clientPhone.includes(searchDigits));
+
     return isPending && matchesSearch;
   });
 
   const totalPendingAmount = sales.filter(s => {
-    const hasValidFutureOrTodayDelivery = s.deliveryDate && s.deliveryDate !== "Sem data informada" && s.deliveryDate >= todayStr;
     return !s.isBudget && 
-           (s.materialEntregue === false || !s.materialEntregue) && 
-           (s.balanceDue > 0 || hasValidFutureOrTodayDelivery);
-  }).reduce((acc, sale) => acc + sale.balanceDue, 0);
+           !isQuickSaleClient(s.clientName) && 
+           (s.balanceDue || 0) > 0.001;
+  }).reduce((acc, sale) => acc + (sale.balanceDue || 0), 0);
 
   const formatBRL = (val: number) => {
     return new Intl.NumberFormat("pt-BR", {

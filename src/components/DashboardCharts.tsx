@@ -13,7 +13,7 @@ import {
   CheckCircle2
 } from "lucide-react";
 import React, { useState } from "react";
-import { Sale, getSaleOrderDate, getSaleOperationCost } from "../types";
+import { Sale, getSaleOrderDate, getSaleOperationCost, isQuickSaleClient } from "../types";
 import {
   LineChart,
   Line,
@@ -277,7 +277,7 @@ export function DashboardCharts({
     }, 0);
   const totalNetProfit = totalSales - totalExpenses;
   const totalReceived = totalSales;
-  const totalPending = sales.filter(s => !s.isBudget).reduce((sum, s) => sum + s.balanceDue, 0);
+  const totalPending = sales.filter(s => !s.isBudget && !isQuickSaleClient(s.clientName)).reduce((sum, s) => sum + (s.balanceDue || 0), 0);
 
   // Average ticket (ticket médio)
   const averageTicket = activeSales.length > 0 ? totalSales / activeSales.length : 0;

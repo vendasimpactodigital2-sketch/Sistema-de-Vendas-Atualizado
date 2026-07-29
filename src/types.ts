@@ -188,5 +188,21 @@ export interface SupportConfig {
   mensagem_fechado: string;
 }
 
+export function isQuickSaleClient(clientName?: string): boolean {
+  if (!clientName) return true;
+  const name = clientName.trim().toLowerCase();
+  return (
+    name === "" ||
+    name === "venda rápida" ||
+    name === "venda rapida" ||
+    name === "balcão" ||
+    name === "balcao" ||
+    name === "consumidor" ||
+    name === "cliente não identificado" ||
+    name === "cliente nao identificado"
+  );
+}
+
+
 
 

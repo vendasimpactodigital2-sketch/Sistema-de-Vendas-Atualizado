@@ -31,7 +31,7 @@ const LazyLoader = () => (
     </p>
   </div>
 );
-import { Sale, CompanyProfile, Expense, User, CatalogProduct, getSaleOrderDate, getSaleOperationCost, CustomReminder, CashRegisterState, CashRegisterSession } from "./types";
+import { Sale, CompanyProfile, Expense, User, CatalogProduct, getSaleOrderDate, getSaleOperationCost, CustomReminder, CashRegisterState, CashRegisterSession, isQuickSaleClient } from "./types";
 import { AuthScreen } from "./components/AuthScreen";
 import { AdminMensalistas } from "./components/AdminMensalistas";
 import { Sparkles, DollarSign, Building2, ShieldAlert, TrendingDown, RefreshCw, X, Trophy, CheckCircle, Info, AlertTriangle, Trash2, Bell, Volume2, VolumeX, Package, MapPin, Calendar, Clock, Check, Gift, Fingerprint, Eye, EyeOff, Phone, Wallet, Search } from "lucide-react";
@@ -1881,6 +1881,17 @@ export default function App() {
 
     return sales.filter((sale) => {
       if (!sale.date) return false;
+
+      // Filter by status if salesStatusFilter is active
+      if (salesStatusFilter === "pending") {
+        if (sale.isBudget) return false;
+        if (isQuickSaleClient(sale.clientName)) return false; // Exclude quick sales / unidentified clients
+        if ((sale.balanceDue || 0) <= 0.001) return false; // Exclude sales that already gave baixa (paid full)
+      } else if (salesStatusFilter === "paid") {
+        if ((sale.balanceDue || 0) > 0.001) return false;
+      }
+
+      // Filter by date
       const saleLocalDate = getLocalDateFromISO(sale.date);
       if (filterPeriod === "today") {
         return saleLocalDate === todayStr;
@@ -1896,7 +1907,7 @@ export default function App() {
       }
       return true;
     });
-  }, [sales, filterPeriod, customDate, customStartDate, customEndDate]);
+  }, [sales, filterPeriod, salesStatusFilter, customDate, customStartDate, customEndDate]);
 
   const filteredExpenses = React.useMemo(() => {
     const localDate = new Date();
@@ -3867,12 +3878,9 @@ export default function App() {
           setLocateClientClicks((prev) => prev + 1);
         }}
         pendingSalesCount={sales.filter((s) => {
-          const lDate = new Date();
-          const tStr = `${lDate.getFullYear()}-${String(lDate.getMonth() + 1).padStart(2, '0')}-${String(lDate.getDate()).padStart(2, '0')}`;
-          const hasValidFutureOrTodayDelivery = s.deliveryDate && s.deliveryDate !== "Sem data informada" && s.deliveryDate >= tStr;
           return !s.isBudget && 
-                 (s.materialEntregue === false || !s.materialEntregue) && 
-                 (s.balanceDue > 0 || hasValidFutureOrTodayDelivery);
+                 !isQuickSaleClient(s.clientName) && 
+                 (s.balanceDue || 0) > 0.001;
         }).length}
         onRetiradasClick={() => setShowPendingModal(true)}
         onMetasSemanaClick={() => setShowWeeklyGoalModal(true)}

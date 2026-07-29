@@ -1,6 +1,6 @@
 import { DollarSign, ShieldAlert, BadgePercent, TrendingUp, HandCoins, Truck, LayoutDashboard, Trophy } from "lucide-react";
 import React from "react";
-import { Sale, Expense, getSaleOrderDate, getSaleOperationCost } from "../types";
+import { Sale, Expense, getSaleOrderDate, getSaleOperationCost, isQuickSaleClient } from "../types";
 
 interface MetricsCardsProps {
   sales: Sale[];
@@ -107,9 +107,10 @@ export function MetricsCards({
   const salesInPeriod = sales.filter((s) => !s.isBudget && isDateInPeriod(getSaleOrderDate(s)));
   const totalSalesValue = salesInPeriod.reduce((sum, s) => sum + s.totalValue, 0);
 
-  // 3. Pendentes de Caixa (Saldo devedor total acumulado geral não pago - Backlog)
-  const totalPending = sales.filter(s => !s.isBudget).reduce((sum, sale) => sum + sale.balanceDue, 0);
-  const activePendingCount = sales.filter((s) => !s.isBudget && s.balanceDue > 0).length;
+  // 3. Pendentes de Caixa (Saldo devedor total acumulado geral de clientes identificados - Backlog)
+  const pendingSalesList = sales.filter((s) => !s.isBudget && !isQuickSaleClient(s.clientName) && (s.balanceDue || 0) > 0.001);
+  const totalPending = pendingSalesList.reduce((sum, sale) => sum + (sale.balanceDue || 0), 0);
+  const activePendingCount = pendingSalesList.length;
 
   // Extra indicators (Discounts and motoboy costs are part of the order date setup)
   const totalMotoboy = sales
