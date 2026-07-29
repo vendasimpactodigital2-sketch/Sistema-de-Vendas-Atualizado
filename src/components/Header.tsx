@@ -269,7 +269,7 @@ export function Header({
             <div className="flex items-center gap-3">
               <div className="relative">
                 <div className="absolute -inset-1 rounded-lg bg-gradient-to-r from-brand-magenta to-brand-cyan opacity-75 blur-sm animate-pulse"></div>
-                <div className="relative flex h-10 w-10 items-center justify-center rounded-lg bg-slate-900 border border-slate-700 overflow-hidden">
+                <div className="relative flex h-12 w-12 items-center justify-center rounded-xl bg-slate-950 border border-slate-700/80 overflow-hidden shadow-md">
                   {companyLogo ? (
                     <img 
                       src={companyLogo} 
@@ -278,7 +278,7 @@ export function Header({
                       referrerPolicy="no-referrer"
                     />
                   ) : (
-                    <NexvoltLogo iconSize={36} />
+                    <NexvoltLogo iconSize={46} />
                   )}
                 </div>
               </div>
