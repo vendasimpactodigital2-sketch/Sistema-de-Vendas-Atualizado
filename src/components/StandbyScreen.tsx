@@ -239,9 +239,9 @@ export function StandbyScreen({
           transition={{ duration: 0.4, delay: 0.1, ease: "easeOut" }}
           className="relative group w-full"
         >
-          <div className="relative bg-slate-900/80 border border-slate-800 rounded-2xl p-3 flex flex-col items-center justify-center space-y-2 shadow-lg backdrop-blur-xl">
+          <div className="relative bg-slate-900/80 border border-slate-800 rounded-2xl p-4 flex flex-col items-center justify-center space-y-3 shadow-lg backdrop-blur-xl">
             {logoUrl ? (
-              <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl overflow-hidden bg-slate-950 p-1.5 border border-slate-800 shadow-inner flex items-center justify-center">
+              <div className="w-24 h-24 sm:w-32 sm:h-32 rounded-2xl overflow-hidden bg-slate-950 p-2 border border-slate-800 shadow-inner flex items-center justify-center">
                 <img
                   src={logoUrl}
                   alt={companyName}
@@ -250,17 +250,14 @@ export function StandbyScreen({
                 />
               </div>
             ) : (
-              <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-xl bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 border border-slate-800/80 flex flex-col items-center justify-center p-2 shadow-inner">
-                <Building2 className="h-8 w-8 text-brand-cyan" />
+              <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 border border-slate-800/80 flex flex-col items-center justify-center p-3 shadow-inner">
+                <Building2 className="h-10 w-10 text-brand-cyan" />
               </div>
             )}
 
             {/* Company Title */}
-            <div className="space-y-0.5">
-              <span className="text-[9px] font-mono font-bold uppercase tracking-widest text-brand-cyan bg-brand-cyan/10 px-2.5 py-0.5 rounded-full border border-brand-cyan/20">
-                EMPRESA SELECIONADA
-              </span>
-              <h1 className="text-base sm:text-xl font-black text-transparent bg-clip-text bg-gradient-to-r from-white via-slate-100 to-slate-300 uppercase tracking-tight font-sans">
+            <div className="space-y-0.5 text-center">
+              <h1 className="text-lg sm:text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-white via-slate-100 to-slate-300 uppercase tracking-tight font-sans">
                 {companyName}
               </h1>
             </div>

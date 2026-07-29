@@ -833,9 +833,6 @@ export function Header({
                   </span>
                 </div>
               </div>
-              <span className="bg-brand-cyan/15 text-brand-cyan text-[9px] font-mono font-black px-1.5 py-0.5 rounded border border-brand-cyan/35 shadow-[0_0_6px_rgba(34,211,238,0.1)] whitespace-nowrap shrink-0">
-                {todaysMaterialsCount} itens
-              </span>
             </button>
           )}
 
