@@ -857,7 +857,7 @@ export function Header({
               type="button"
               onClick={onRetiradasClick}
               className="px-3 py-1.5 bg-yellow-500/10 hover:bg-yellow-500/15 rounded-xl border border-yellow-500/20 flex items-center gap-1.5 text-yellow-500 transition-all cursor-pointer text-xs font-bold shrink-0 animate-pulse hover:animate-none h-9"
-              title="Vendas com saldo devedor pendente"
+              title="Vendas com retirada pendente ou saldo a receber"
             >
               <ShieldAlert className="h-4 w-4 text-yellow-500 shrink-0" />
               <span>Retiradas:</span>

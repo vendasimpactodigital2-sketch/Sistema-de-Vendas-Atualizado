@@ -203,6 +203,37 @@ export function isQuickSaleClient(clientName?: string): boolean {
   );
 }
 
+export function isPendingRetiradaOrBaixa(sale: Sale): boolean {
+  if (!sale || sale.isBudget) return false;
+  if (isQuickSaleClient(sale.clientName)) return false;
+
+  const balanceDue = sale.balanceDue || 0;
+
+  // 1. If balance is due (> 0), it MUST be in Retiradas to receive payment ("dar baixa")
+  if (balanceDue > 0.001) {
+    return true;
+  }
+
+  // 2. If balanceDue <= 0.001 (fully paid / ND A RECEBER):
+  // If explicitly marked as delivered, it is done and removed from Retiradas
+  if (sale.materialEntregue) {
+    return false;
+  }
+
+  // Check order/delivery date vs today (local date comparison)
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const todayStr = `${year}-${month}-${day}`;
+
+  const orderDateStr = sale.orderDate || (sale.date ? sale.date.substring(0, 10) : "");
+  const deliveryDateStr = sale.deliveryDate || orderDateStr;
+
+  // Fully paid sales created today or with delivery date >= today are pending delivery
+  return (deliveryDateStr >= todayStr || orderDateStr >= todayStr);
+}
+
 
 
 

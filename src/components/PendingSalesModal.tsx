@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { X, Search, DollarSign, HandCoins, Printer, MessageCircle, AlertCircle, Calendar, Clock, Check, Coins, Phone, Edit2, Trash2 } from "lucide-react";
-import { Sale, CompanyProfile, isQuickSaleClient } from "../types";
+import { Sale, CompanyProfile, isQuickSaleClient, isPendingRetiradaOrBaixa } from "../types";
 import { jsPDF } from "jspdf";
 import { parseClientImages } from "../supabase";
 
@@ -122,12 +122,9 @@ export function PendingSalesModal({ isOpen, onClose, sales, onSaveSale, company,
   const localDate = new Date();
   const todayStr = `${localDate.getFullYear()}-${String(localDate.getMonth() + 1).padStart(2, '0')}-${String(localDate.getDate()).padStart(2, '0')}`;
 
-  // Filter sales that are pending payment clearance ("dar baixa")
-  // Exclude quick sales ("Venda Rápida") without identified client and sales that already gave baixa (balanceDue <= 0)
+  // Filter sales that are pending payment clearance ("dar baixa") or material pickup
   const pendingSales = sales.filter((sale) => {
-    const isPending = !sale.isBudget && 
-                      !isQuickSaleClient(sale.clientName) && 
-                      (sale.balanceDue || 0) > 0.001;
+    const isPending = isPendingRetiradaOrBaixa(sale);
 
     const clientName = (sale.clientName || "").toLowerCase();
     const clientPhone = (sale.clientPhone || "").replace(/\D/g, "");
@@ -984,8 +981,8 @@ export function PendingSalesModal({ isOpen, onClose, sales, onSaveSale, company,
               <div className="p-3 bg-slate-950 border border-slate-850 rounded-full text-slate-600">
                 <AlertCircle className="h-8 w-8 text-slate-500" />
               </div>
-              <h4 className="text-sm font-bold text-slate-300">Nenhum saldo pendente encontrado</h4>
-              <p className="text-[11px] text-slate-500">Adicione uma venda com sinal parcial ou refine seus filtros de busca.</p>
+              <h4 className="text-sm font-bold text-slate-300">Nenhuma retirada ou saldo pendente encontrado</h4>
+              <p className="text-[11px] text-slate-500">Todas as notinhas foram entregues e quitadas.</p>
             </div>
           ) : (
             pendingSales.map((sale) => {
@@ -1001,9 +998,15 @@ export function PendingSalesModal({ isOpen, onClose, sales, onSaveSale, company,
                   <div className="space-y-2 lg:max-w-md w-full">
                     <div className="flex items-start justify-between">
                       <div>
-                        <span className="px-1.5 py-0.5 rounded bg-yellow-500/15 text-yellow-500 text-[8px] font-mono uppercase tracking-wider font-bold">
-                          Falta Retirar & Pagar
-                        </span>
+                        {(sale.balanceDue || 0) > 0.001 ? (
+                          <span className="px-1.5 py-0.5 rounded bg-yellow-500/15 text-yellow-500 text-[8px] font-mono uppercase tracking-wider font-bold">
+                            Falta Retirar & Pagar
+                          </span>
+                        ) : (
+                          <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-[8px] font-mono uppercase tracking-wider font-black border border-emerald-500/30">
+                            Pronto P/ Retirar • ND A RECEBER
+                          </span>
+                        )}
                         <h3 className="mt-0.5 text-sm font-extrabold text-white uppercase font-sans">
                           {sale.clientName}
                         </h3>

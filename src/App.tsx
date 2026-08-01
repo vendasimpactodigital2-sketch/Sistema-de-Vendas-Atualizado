@@ -32,7 +32,7 @@ const LazyLoader = () => (
     </p>
   </div>
 );
-import { Sale, CompanyProfile, Expense, User, CatalogProduct, getSaleOrderDate, getSaleOperationCost, CustomReminder, CashRegisterState, CashRegisterSession, isQuickSaleClient } from "./types";
+import { Sale, CompanyProfile, Expense, User, CatalogProduct, getSaleOrderDate, getSaleOperationCost, CustomReminder, CashRegisterState, CashRegisterSession, isQuickSaleClient, isPendingRetiradaOrBaixa } from "./types";
 import { AuthScreen } from "./components/AuthScreen";
 import { AdminMensalistas } from "./components/AdminMensalistas";
 import { Sparkles, DollarSign, Building2, ShieldAlert, TrendingDown, RefreshCw, X, Trophy, CheckCircle, Info, AlertTriangle, Trash2, Bell, Volume2, VolumeX, Package, MapPin, Calendar, Clock, Check, Gift, Fingerprint, Eye, EyeOff, Phone, Wallet, Search } from "lucide-react";
@@ -1886,9 +1886,7 @@ export default function App() {
 
       // Filter by status if salesStatusFilter is active
       if (salesStatusFilter === "pending") {
-        if (sale.isBudget) return false;
-        if (isQuickSaleClient(sale.clientName)) return false; // Exclude quick sales / unidentified clients
-        if ((sale.balanceDue || 0) <= 0.001) return false; // Exclude sales that already gave baixa (paid full)
+        if (!isPendingRetiradaOrBaixa(sale)) return false;
       } else if (salesStatusFilter === "paid") {
         if ((sale.balanceDue || 0) > 0.001) return false;
       }
@@ -3792,7 +3790,7 @@ export default function App() {
           setIsStandbyActive(false);
           setActiveTab("sale");
         }}
-        pendingSalesCount={sales.filter((s) => s.balanceDue > 0).length}
+        pendingSalesCount={sales.filter(isPendingRetiradaOrBaixa).length}
         todaysDeliveriesCount={todaysDeliveries.length}
       />
     );
@@ -3878,11 +3876,7 @@ export default function App() {
         onLocateClientClick={() => {
           setShowClientSearchModal(true);
         }}
-        pendingSalesCount={sales.filter((s) => {
-          return !s.isBudget && 
-                 !isQuickSaleClient(s.clientName) && 
-                 (s.balanceDue || 0) > 0.001;
-        }).length}
+        pendingSalesCount={sales.filter(isPendingRetiradaOrBaixa).length}
         onRetiradasClick={() => setShowPendingModal(true)}
         onMetasSemanaClick={() => setShowWeeklyGoalModal(true)}
         isCashRegisterOpen={!!cashRegister.currentSession}

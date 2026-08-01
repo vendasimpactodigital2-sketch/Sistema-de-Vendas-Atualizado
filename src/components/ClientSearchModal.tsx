@@ -369,7 +369,7 @@ export function ClientSearchModal({
       ...sale,
       downPayment: (sale.downPayment || 0) + amountToPay,
       balanceDue: newBalanceDue >= 0.01 ? newBalanceDue : 0,
-      materialEntregue: newBalanceDue < 0.01 ? true : sale.materialEntregue,
+      materialEntregue: sale.materialEntregue || false,
       payments: [
         ...(sale.payments || []),
         {
@@ -1158,6 +1158,10 @@ export function ClientSearchModal({
                               ) : isPendingPayment ? (
                                 <span className="text-[10px] font-mono font-bold uppercase bg-rose-500/10 text-rose-400 border border-rose-500/20 px-2 py-0.5 rounded-md animate-pulse">
                                   Baixa Pendente
+                                </span>
+                              ) : !sale.materialEntregue ? (
+                                <span className="text-[10px] font-mono font-bold uppercase bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 px-2 py-0.5 rounded-md">
+                                  ND A RECEBER (Pend. Retirada)
                                 </span>
                               ) : (
                                 <span className="text-[10px] font-mono font-bold uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-md">
