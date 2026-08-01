@@ -15,7 +15,13 @@ import {
   BarChart4,
   ArrowRight,
   Lock,
-  Unlock
+  Unlock,
+  PieChart as PieChartIcon,
+  AlertTriangle,
+  CheckCircle2,
+  Zap,
+  Target,
+  ShieldAlert
 } from "lucide-react";
 import {
   BarChart,
@@ -27,7 +33,10 @@ import {
   Legend,
   ResponsiveContainer,
   AreaChart,
-  Area
+  Area,
+  PieChart,
+  Pie,
+  Cell
 } from "recharts";
 import { jsPDF } from "jspdf";
 
@@ -192,6 +201,68 @@ export function FinancialReports({ sales, expenses, company, cashRegister }: Fin
   // Real Net Profit
   const lucroLiquidoReal = faturamentoTotal - totalSaidasGeral;
   const margemLucro = faturamentoTotal > 0 ? (lucroLiquidoReal / faturamentoTotal) * 100 : 0;
+
+  // Ticket Médio & Financial Health Metrics
+  const totalVendasCount = filteredSales.length;
+  const ticketMedio = totalVendasCount > 0 ? faturamentoTotal / totalVendasCount : 0;
+  const proporcaoGastosVendas = faturamentoTotal > 0 ? (totalSaidasGeral / faturamentoTotal) * 100 : 0;
+  const proporcaoLucroVendas = faturamentoTotal > 0 ? (Math.max(0, lucroLiquidoReal) / faturamentoTotal) * 100 : 0;
+
+  // Pie Chart Data (O Que Vendeu em VERDE, Gastos em VERMELHO, O Que Sobrou em AMARELO)
+  const pieChartData = React.useMemo(() => [
+    { name: "O Que Vendeu", value: faturamentoTotal, color: "#10b981", rawLabel: "Vendeu" },
+    { name: "Gastos / Saídas", value: totalSaidasGeral, color: "#ef4444", rawLabel: "Gastou" },
+    { name: "O Que Sobrou (Lucro)", value: Math.max(0, lucroLiquidoReal), color: "#f59e0b", rawLabel: "Sobrou" }
+  ], [faturamentoTotal, totalSaidasGeral, lucroLiquidoReal]);
+
+  // Financial Health Mode Diagnosis
+  const healthMode = React.useMemo(() => {
+    if (faturamentoTotal === 0 && totalSaidasGeral === 0) {
+      return {
+        status: "neutral",
+        title: "Modo Neutro: Sem Movimentação",
+        badge: "ℹ️ SEM DADOS SUFICIENTES",
+        color: "text-slate-400 bg-slate-900/60 border-slate-800",
+        badgeColor: "bg-slate-800 text-slate-300 border-slate-700",
+        message: "Não foram registradas vendas nem despesas no período selecionado.",
+        tip: "Selecione outro período no filtro de datas para analisar a saúde financeira."
+      };
+    }
+
+    if (lucroLiquidoReal < 0 || totalSaidasGeral > faturamentoTotal) {
+      return {
+        status: "danger",
+        title: "Alerta de Gastos: Despesas Superaram as Vendas",
+        badge: "🚨 MODO ALERTA VERMELHO: GASTOS EXCESSIVOS",
+        color: "text-rose-400 bg-rose-500/10 border-rose-500/30",
+        badgeColor: "bg-rose-500/20 text-rose-400 border-rose-500/40",
+        message: `Atenção! Seus gastos (${formatBRL(totalSaidasGeral)}) superaram o total vendido (${formatBRL(faturamentoTotal)}) no período selecionado, gerando déficit de ${formatBRL(Math.abs(lucroLiquidoReal))}.`,
+        tip: `Seu Ticket Médio atual é de ${formatBRL(ticketMedio)}. Recomenda-se conter despesas administrativas imediatamente ou promover produtos de maior valor agregado.`
+      };
+    }
+
+    if (margemLucro < 25 || proporcaoGastosVendas > 75) {
+      return {
+        status: "warning",
+        title: "Atenção à Margem: Lucro Moderado",
+        badge: "⚠️ MODO ATENÇÃO: MARGEM COMPROMETIDA",
+        color: "text-amber-400 bg-amber-500/10 border-amber-500/30",
+        badgeColor: "bg-amber-500/20 text-amber-400 border-amber-500/40",
+        message: `As vendas cobriram as despesas, mas os gastos consumiram ${proporcaoGastosVendas.toFixed(1)}% do faturamento. O que sobrou (amarelo) foi de ${formatBRL(lucroLiquidoReal)} (${margemLucro.toFixed(1)}%).`,
+        tip: `Seu Ticket Médio é de ${formatBRL(ticketMedio)} em ${totalVendasCount} vendas. Pequenas reduções em custos farão o lucro líquido disparar!`
+      };
+    }
+
+    return {
+      status: "success",
+      title: "Vendas em Alta: Excelente Saúde Financeira",
+      badge: "🚀 MODO VENDAS EM ALTA • DESEMPENHO EXCELENTE",
+      color: "text-emerald-400 bg-emerald-500/10 border-emerald-500/30",
+      badgeColor: "bg-emerald-500/20 text-emerald-400 border-emerald-500/40",
+      message: `Excelente ritmo de vendas! Você faturou ${formatBRL(faturamentoTotal)} e o que sobrou no caixa foi ${formatBRL(lucroLiquidoReal)} (Margem de ${margemLucro.toFixed(1)}%).`,
+      tip: `Seu Ticket Médio está forte em ${formatBRL(ticketMedio)} em ${totalVendasCount} pedidos. A proporção de gastos ficou controlada em apenas ${proporcaoGastosVendas.toFixed(1)}%.`
+    };
+  }, [faturamentoTotal, totalSaidasGeral, lucroLiquidoReal, margemLucro, proporcaoGastosVendas, ticketMedio, totalVendasCount]);
 
   const faturamentoVendasRapidas = React.useMemo(() => {
     return filteredSales
@@ -630,6 +701,10 @@ export function FinancialReports({ sales, expenses, company, cashRegister }: Fin
 
     const pdfLucroLiquidoReal = pdfFaturamentoTotal - pdfTotalSaidasGeral;
     const pdfMargemLucro = pdfFaturamentoTotal > 0 ? (pdfLucroLiquidoReal / pdfFaturamentoTotal) * 100 : 0;
+    const pdfSalesCount = pdfSales.length;
+    const pdfTicketMedio = pdfSalesCount > 0 ? pdfFaturamentoTotal / pdfSalesCount : 0;
+    const pdfProporcaoGastos = pdfFaturamentoTotal > 0 ? (pdfTotalSaidasGeral / pdfFaturamentoTotal) * 100 : 0;
+    const pdfProporcaoLucro = pdfFaturamentoTotal > 0 ? (Math.max(0, pdfLucroLiquidoReal) / pdfFaturamentoTotal) * 100 : 0;
 
     const doc = new jsPDF();
     // Elegant header
@@ -653,7 +728,7 @@ export function FinancialReports({ sales, expenses, company, cashRegister }: Fin
     doc.setTextColor(156, 163, 175);
     doc.text(`Gerado em: ${docDate}`, 140, 30);
 
-    let y = 52;
+    let y = 50;
 
     // Check page break utility
     const checkPageBreak = (neededSpace: number) => {
@@ -665,12 +740,118 @@ export function FinancialReports({ sales, expenses, company, cashRegister }: Fin
       return false;
     };
 
-    // Section 1: Consolidated KPIs boxes
+    // SECTION 1: DIAGNÓSTICO DE SAÚDE FINANCEIRA & TICKET MÉDIO
+    checkPageBreak(38);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.setTextColor(15, 23, 42);
+    doc.text("1. DIAGNÓSTICO DE SAÚDE FINANCEIRA & TICKET MÉDIO", 14, y);
+    y += 5;
+
+    // Dynamic color setup based on health status
+    let bgR = 240, bgG = 253, bgB = 244; // Green
+    let borderR = 16, borderG = 185, borderB = 129;
+    let statusText = "🚀 MODO VENDAS EM ALTA • SAÚDE FINANCEIRA EXCELENTE";
+    let statusTip = `As vendas geraram ${formatBRL(pdfFaturamentoTotal)} com margem líquida de ${pdfMargemLucro.toFixed(1)}%. Gastos controlados em ${pdfProporcaoGastos.toFixed(1)}%.`;
+
+    if (pdfLucroLiquidoReal < 0 || pdfTotalSaidasGeral > pdfFaturamentoTotal) {
+      bgR = 254; bgG = 242; bgB = 242; // Red
+      borderR = 239; borderG = 68; borderB = 68;
+      statusText = "🚨 MODO ALERTA VERMELHO • GASTOS SUPERARAM AS VENDAS";
+      statusTip = `Atenção! Saídas (${formatBRL(pdfTotalSaidasGeral)}) foram maiores que as vendas (${formatBRL(pdfFaturamentoTotal)}). Déficit: ${formatBRL(Math.abs(pdfLucroLiquidoReal))}.`;
+    } else if (pdfMargemLucro < 25 || pdfProporcaoGastos > 75) {
+      bgR = 254; bgG = 252; bgB = 232; // Yellow
+      borderR = 245; borderG = 158; borderB = 11;
+      statusText = "⚠️ MODO ATENÇÃO • MARGEM DE LUCRO COMPROMETIDA";
+      statusTip = `Os custos consumiram ${pdfProporcaoGastos.toFixed(1)}% das vendas. O que sobrou no caixa foi ${formatBRL(pdfLucroLiquidoReal)} (${pdfMargemLucro.toFixed(1)}%).`;
+    }
+
+    // Render Diagnostic Box
+    doc.setFillColor(bgR, bgG, bgB);
+    doc.rect(14, y, 182, 28, "F");
+    doc.setDrawColor(borderR, borderG, borderB);
+    doc.rect(14, y, 182, 28, "S");
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9.5);
+    doc.setTextColor(15, 23, 42);
+    doc.text(statusText, 18, y + 6);
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8.5);
+    doc.setTextColor(30, 41, 59);
+    doc.text(`TICKET MÉDIO POR VENDA: ${formatBRL(pdfTicketMedio)}`, 18, y + 12);
+    doc.text(`TOTAL DE VENDAS: ${pdfSalesCount} pedidos`, 105, y + 12);
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7.5);
+    doc.setTextColor(71, 85, 105);
+    doc.text(statusTip, 18, y + 18);
+    doc.text(`• O que vendeu (Verde): ${formatBRL(pdfFaturamentoTotal)} | Gastos (Vermelho): ${formatBRL(pdfTotalSaidasGeral)} | Sobrou (Amarelo): ${formatBRL(Math.max(0, pdfLucroLiquidoReal))}`, 18, y + 23);
+
+    y += 34;
+
+    // SECTION 2: PROPORÇÃO VISUAL (GRÁFICO DE PIZZA EM BLOCOS COLORIDOS)
+    checkPageBreak(25);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.setTextColor(15, 23, 42);
+    doc.text("2. RESUMO DE PROPORÇÃO FINANCEIRA (GRÁFICO DE PIZZA)", 14, y);
+    y += 5;
+
+    // Block 1: O Que Vendeu (Verde)
+    doc.setFillColor(240, 253, 244);
+    doc.rect(14, y, 58, 18, "F");
+    doc.setDrawColor(16, 185, 129);
+    doc.rect(14, y, 58, 18, "S");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(7.5);
+    doc.setTextColor(22, 101, 52);
+    doc.text("O QUE VENDEU (VERDE)", 17, y + 5);
+    doc.setFontSize(9);
+    doc.text(formatBRL(pdfFaturamentoTotal), 17, y + 11);
+    doc.setFontSize(6.5);
+    doc.setFont("helvetica", "normal");
+    doc.text("100% da Base de Vendas", 17, y + 15);
+
+    // Block 2: Gastos (Vermelho)
+    doc.setFillColor(254, 242, 242);
+    doc.rect(76, y, 58, 18, "F");
+    doc.setDrawColor(239, 68, 68);
+    doc.rect(76, y, 58, 18, "S");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(7.5);
+    doc.setTextColor(153, 27, 27);
+    doc.text("GASTOS (VERMELHO)", 79, y + 5);
+    doc.setFontSize(9);
+    doc.text(formatBRL(pdfTotalSaidasGeral), 79, y + 11);
+    doc.setFontSize(6.5);
+    doc.setFont("helvetica", "normal");
+    doc.text(`${pdfProporcaoGastos.toFixed(1)}% do Faturamento`, 79, y + 15);
+
+    // Block 3: O Que Sobrou (Amarelo)
+    doc.setFillColor(254, 252, 232);
+    doc.rect(138, y, 58, 18, "F");
+    doc.setDrawColor(245, 158, 11);
+    doc.rect(138, y, 58, 18, "S");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(7.5);
+    doc.setTextColor(113, 63, 18);
+    doc.text("O QUE SOBROU (AMARELO)", 141, y + 5);
+    doc.setFontSize(9);
+    doc.text(formatBRL(Math.max(0, pdfLucroLiquidoReal)), 141, y + 11);
+    doc.setFontSize(6.5);
+    doc.setFont("helvetica", "normal");
+    doc.text(`${pdfProporcaoLucro.toFixed(1)}% Sobra Líquida`, 141, y + 15);
+
+    y += 24;
+
+    // SECTION 3: DEMONSTRATIVO FINANCEIRO CONSOLIDADO
     checkPageBreak(15);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(11);
     doc.setTextColor(15, 23, 42);
-    doc.text("1. DEMONSTRATIVO FINANCEIRO CONSOLIDADO", 14, y);
+    doc.text("3. DEMONSTRATIVO FINANCEIRO CONSOLIDADO", 14, y);
     y += 6;
 
     // Draw grid headers
@@ -719,12 +900,12 @@ export function FinancialReports({ sales, expenses, company, cashRegister }: Fin
 
     y += 4;
 
-    // Section 2: Detailed entries list
+    // Section 4: Detailed entries list
     checkPageBreak(20);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(11);
     doc.setTextColor(15, 23, 42);
-    doc.text("2. REGISTRO DETALHADO DE ENTRADAS EM CAIXA (RECEBIMENTOS)", 14, y);
+    doc.text("4. REGISTRO DETALHADO DE ENTRADAS EM CAIXA (RECEBIMENTOS)", 14, y);
     y += 5;
 
     doc.setFillColor(15, 23, 42);
@@ -780,12 +961,12 @@ export function FinancialReports({ sales, expenses, company, cashRegister }: Fin
 
     y += 4;
 
-    // Section 3: Detailed transactions list
+    // Section 5: Detailed transactions list
     checkPageBreak(20);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(11);
     doc.setTextColor(15, 23, 42);
-    doc.text("3. REGISTRO DETALHADO DE VENDAS (FATURAMENTO BRUTO)", 14, y);
+    doc.text("5. REGISTRO DETALHADO DE VENDAS (FATURAMENTO BRUTO)", 14, y);
     y += 5;
 
     // Table mapping
@@ -857,13 +1038,13 @@ export function FinancialReports({ sales, expenses, company, cashRegister }: Fin
     }
 
     y += 4;
-    // Section 4: Detailed expenses & costs list
+    // Section 6: Detailed expenses & costs list
     checkPageBreak(20);
 
     doc.setFont("helvetica", "bold");
     doc.setFontSize(11);
     doc.setTextColor(15, 23, 42);
-    doc.text("4. DETALHAMENTO DE DESPESAS E CUSTOS (SAÍDAS)", 14, y);
+    doc.text("6. DETALHAMENTO DE DESPESAS E CUSTOS (SAÍDAS)", 14, y);
     y += 5;
 
     doc.setFillColor(15, 23, 42);
@@ -1339,6 +1520,53 @@ export function FinancialReports({ sales, expenses, company, cashRegister }: Fin
 
       {displayMode === "geral" && (
         <>
+          {/* DIAGNÓSTICO DE SAÚDE FINANCEIRA E TICKET MÉDIO */}
+          <div className={`p-5 rounded-xl border font-sans space-y-4 transition-all duration-300 ${healthMode.color}`}>
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <span className={`text-[10px] font-black uppercase px-2.5 py-1 rounded-full border tracking-widest ${healthMode.badgeColor}`}>
+                  {healthMode.badge}
+                </span>
+                <h3 className="text-sm font-extrabold text-white uppercase tracking-wider">{healthMode.title}</h3>
+              </div>
+
+              {/* Quick metric pill for ticket medio */}
+              <div className="flex items-center gap-3 bg-slate-950/80 px-3.5 py-1.5 rounded-xl border border-slate-800 shrink-0 shadow-lg">
+                <Target className="h-4 w-4 text-brand-cyan" />
+                <div className="text-left font-mono">
+                  <span className="text-[9px] text-slate-400 uppercase block font-sans">Ticket Médio por Venda</span>
+                  <span className="text-sm font-extrabold text-slate-100">{formatBRL(ticketMedio)}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-3 pt-2 border-t border-slate-800/60 font-mono text-left">
+              <div className="bg-slate-950/70 p-3 rounded-xl border border-slate-850">
+                <span className="text-[9px] text-slate-400 block uppercase font-sans">Total de Vendas</span>
+                <span className="text-sm font-black text-slate-100">{totalVendasCount} <span className="text-[10px] text-slate-400 font-normal">pedidos</span></span>
+              </div>
+              <div className="bg-slate-950/70 p-3 rounded-xl border border-slate-850">
+                <span className="text-[9px] text-slate-400 block uppercase font-sans">Ticket Médio</span>
+                <span className="text-sm font-black text-brand-cyan">{formatBRL(ticketMedio)}</span>
+              </div>
+              <div className="bg-slate-950/70 p-3 rounded-xl border border-slate-850">
+                <span className="text-[9px] text-slate-400 block uppercase font-sans">Comprometimento de Gastos</span>
+                <span className={`text-sm font-black ${proporcaoGastosVendas > 75 ? "text-rose-400" : "text-amber-400"}`}>
+                  {proporcaoGastosVendas.toFixed(1)}%
+                </span>
+              </div>
+              <div className="bg-slate-950/70 p-3 rounded-xl border border-slate-850">
+                <span className="text-[9px] text-slate-400 block uppercase font-sans">Sobra Líquida (Amarelo)</span>
+                <span className="text-sm font-black text-yellow-400">{formatBRL(Math.max(0, lucroLiquidoReal))}</span>
+              </div>
+            </div>
+
+            <div className="text-left space-y-1 bg-slate-950/80 p-3.5 rounded-xl border border-slate-850">
+              <p className="text-xs text-slate-200 font-medium leading-relaxed">{healthMode.message}</p>
+              <p className="text-[11px] text-slate-400 italic font-sans">💡 <span className="font-bold text-slate-300">Análise Estratégica:</span> {healthMode.tip}</p>
+            </div>
+          </div>
+
           {/* KPI Display Metrics overview */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
             {/* RELATÓRIO DE ENTRADA */}
@@ -1541,36 +1769,101 @@ export function FinancialReports({ sales, expenses, company, cashRegister }: Fin
             )}
           </div>
 
-          {/* Main Charts area on Screen */}
-          <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-850 font-sans space-y-3">
-            <div className="flex justify-between items-center pb-2 border-b border-slate-850">
-              <h3 className="text-xs font-extrabold uppercase text-slate-300 tracking-wider">
-                📶 Evolução Gráfica de Entradas, Saídas e Lucros
-              </h3>
-              <span className="text-[9px] font-mono text-slate-500 uppercase">
-                {chartData.length} Pontos de Dados
-              </span>
+          {/* Main Charts area on Screen: Gráfico Redondo + Evolução Histórica */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            {/* Gráfico Redondo / Pizza (5 cols) */}
+            <div className="lg:col-span-5 bg-slate-950/60 p-5 rounded-xl border border-slate-850 font-sans space-y-4 flex flex-col justify-between">
+              <div className="flex justify-between items-center pb-2.5 border-b border-slate-850">
+                <h3 className="text-xs font-extrabold uppercase text-slate-200 tracking-wider flex items-center gap-2">
+                  <PieChartIcon className="h-4 w-4 text-brand-cyan" />
+                  <span>Proporção Financeira (Gráfico Redondo)</span>
+                </h3>
+                <span className="text-[9px] font-mono text-yellow-400 bg-yellow-500/10 px-2 py-0.5 rounded border border-yellow-500/20 font-bold">
+                  Vendeu x Gastou x Sobrou
+                </span>
+              </div>
+
+              {/* Pie Chart Display */}
+              <div className="h-60 w-full relative flex items-center justify-center">
+                {faturamentoTotal === 0 && totalSaidasGeral === 0 ? (
+                  <div className="text-center text-slate-500 font-mono text-xs">Sem dados no período para o gráfico redondo</div>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={pieChartData}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={48}
+                        outerRadius={80}
+                        paddingAngle={5}
+                        dataKey="value"
+                      >
+                        {pieChartData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={entry.color} stroke="#020617" strokeWidth={3} />
+                        ))}
+                      </Pie>
+                      <Tooltip
+                        formatter={(value: any) => [formatBRL(Number(value)), "Valor"]}
+                        contentStyle={{ backgroundColor: "#020617", borderColor: "#1e293b", borderRadius: "12px", color: "#fff", fontSize: "11px" }}
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
+
+              {/* Color Legend Breakdown */}
+              <div className="grid grid-cols-3 gap-2 pt-3 border-t border-slate-850/80 font-mono text-center">
+                <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/25">
+                  <span className="text-[9px] font-extrabold text-emerald-400 block uppercase font-sans">O Que Vendeu</span>
+                  <span className="text-xs font-black text-white block mt-0.5">{formatBRL(faturamentoTotal)}</span>
+                  <span className="text-[8px] text-emerald-300 font-bold block mt-0.5">100% Base</span>
+                </div>
+                <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/25">
+                  <span className="text-[9px] font-extrabold text-rose-400 block uppercase font-sans">Gastos (Vermelho)</span>
+                  <span className="text-xs font-black text-white block mt-0.5">{formatBRL(totalSaidasGeral)}</span>
+                  <span className="text-[8px] text-rose-300 font-bold block mt-0.5">{proporcaoGastosVendas.toFixed(1)}% do total</span>
+                </div>
+                <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/25">
+                  <span className="text-[9px] font-extrabold text-yellow-400 block uppercase font-sans">O Que Sobrou</span>
+                  <span className="text-xs font-black text-white block mt-0.5">{formatBRL(Math.max(0, lucroLiquidoReal))}</span>
+                  <span className="text-[8px] text-yellow-300 font-bold block mt-0.5">{proporcaoLucroVendas.toFixed(1)}% sobra</span>
+                </div>
+              </div>
             </div>
 
-            <div className="h-80 w-full pt-4">
-              {chartData.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-slate-555 border border-dashed border-slate-850 rounded-xl bg-slate-950/40 font-mono text-xs p-6">
-                  <span>Nenhum faturamento ou despesa localizada no filtro selecionado para rendering do gráfico.</span>
-                </div>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={chartData} margin={{ top: 5, right: 10, left: -5, bottom: 5 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                    <XAxis dataKey="label" stroke="#94a3b8" fontSize={9} tickLine={false} />
-                    <YAxis stroke="#94a3b8" fontSize={9} tickLine={false} tickFormatter={(v) => `R$${v}`} />
-                    <Tooltip content={<CustomChartTooltip />} cursor={{ fill: "#1e293b", opacity: 0.2 }} />
-                    <Legend iconSize={10} wrapperStyle={{ fontSize: "10px", marginTop: "10px" }} />
-                    <Bar name="Faturamento (Entradas)" dataKey="faturamento" fill="#d946ef" radius={[4, 4, 0, 0]} />
-                    <Bar name="Saídas (Despesas)" dataKey="despesas" fill="#ef4444" radius={[4, 4, 0, 0]} />
-                    <Bar name="Lucro Líquido" dataKey="lucro" fill="#10b981" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              )}
+            {/* Evolução Histórica / Gráfico de Barras (7 cols) */}
+            <div className="lg:col-span-7 bg-slate-950/60 p-5 rounded-xl border border-slate-850 font-sans space-y-3 flex flex-col justify-between">
+              <div className="flex justify-between items-center pb-2.5 border-b border-slate-850">
+                <h3 className="text-xs font-extrabold uppercase text-slate-200 tracking-wider flex items-center gap-2">
+                  <BarChart4 className="h-4 w-4 text-brand-magenta" />
+                  <span>📶 Evolução Temporal (Entradas, Gastos e Sobra)</span>
+                </h3>
+                <span className="text-[9px] font-mono text-slate-500 uppercase">
+                  {chartData.length} Pontos
+                </span>
+              </div>
+
+              <div className="h-64 w-full pt-2">
+                {chartData.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-slate-555 border border-dashed border-slate-850 rounded-xl bg-slate-950/40 font-mono text-xs p-6">
+                    <span>Nenhum faturamento ou despesa localizada no filtro selecionado para rendering do gráfico.</span>
+                  </div>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={chartData} margin={{ top: 5, right: 10, left: -5, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                      <XAxis dataKey="label" stroke="#94a3b8" fontSize={9} tickLine={false} />
+                      <YAxis stroke="#94a3b8" fontSize={9} tickLine={false} tickFormatter={(v) => `R$${v}`} />
+                      <Tooltip content={<CustomChartTooltip />} cursor={{ fill: "#1e293b", opacity: 0.2 }} />
+                      <Legend iconSize={10} wrapperStyle={{ fontSize: "10px", marginTop: "10px" }} />
+                      <Bar name="Vendeu (Verde)" dataKey="faturamento" fill="#10b981" radius={[4, 4, 0, 0]} />
+                      <Bar name="Gastos (Vermelho)" dataKey="despesas" fill="#ef4444" radius={[4, 4, 0, 0]} />
+                      <Bar name="Sobrou (Amarelo)" dataKey="lucro" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
             </div>
           </div>
 
