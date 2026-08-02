@@ -3,6 +3,7 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createClient } from "@supabase/supabase-js";
+import Stripe from "stripe";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -11,8 +12,23 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json({ limit: "50mb" }));
+  // Capture raw body for Stripe signature verification
+  app.use(express.json({
+    limit: "50mb",
+    verify: (req: any, _res, buf) => {
+      req.rawBody = buf;
+    }
+  }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
+
+  // Lazy Stripe client helper to prevent crash on startup if STRIPE_SECRET_KEY is not set
+  const getStripeInstance = () => {
+    const key = process.env.STRIPE_SECRET_KEY;
+    if (!key) {
+      throw new Error("A chave STRIPE_SECRET_KEY não está configurada no servidor.");
+    }
+    return new Stripe(key, { apiVersion: "2023-10-16" as any });
+  };
 
   // Lazy Gemini client helper to avoid load-time failure and support dynamic updates
   const getAiInstance = () => {
@@ -680,6 +696,355 @@ ${JSON.stringify(sales, null, 2)}
 
   app.post("/api/webhook/asaas", handleAsaasWebhook);
   app.post("/api/webhooks/asaas", handleAsaasWebhook);
+
+  // ==========================================
+  // STRIPE CHECKOUT & SUBSCRIPTION INTEGRATION
+  // ==========================================
+
+  // 1. Criar Sessão de Checkout do Stripe com 15 dias de Teste Grátis
+  app.post("/api/stripe/create-checkout-session", async (req, res) => {
+    try {
+      const { userId, userEmail, successUrl, cancelUrl } = req.body;
+
+      if (!userId) {
+        return res.status(400).json({ error: "O ID do usuário (userId) é obrigatório." });
+      }
+
+      const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+      if (!stripeSecretKey || stripeSecretKey.trim() === "" || stripeSecretKey.includes("MY_")) {
+        console.warn("[Stripe Checkout] STRIPE_SECRET_KEY não configurada. Ativando link de simulação.");
+        return res.json({
+          url: `${req.headers.origin || "http://localhost:3000"}?payment=simulated_success`,
+          isSimulated: true,
+          message: "Modo de simulação ativado por falta de chave STRIPE_SECRET_KEY."
+        });
+      }
+
+      const stripe = getStripeInstance();
+      const priceId = process.env.STRIPE_PRICE_ID || "price_1TzmqlD15U3MLrZlaibMpiXL";
+      const domain = req.headers.origin || "http://localhost:3000";
+
+      console.log(`[Stripe Checkout] Criando sessão de checkout para usuário ${userId} com 15 dias grátis (Price ID: ${priceId})`);
+
+      const session = await stripe.checkout.sessions.create({
+        payment_method_types: ["card"],
+        mode: "subscription",
+        line_items: [
+          {
+            price: priceId,
+            quantity: 1,
+          },
+        ],
+        subscription_data: {
+          trial_period_days: 15, // 15 dias grátis configurados diretamente no código
+          metadata: {
+            user_id: userId,
+          },
+        },
+        client_reference_id: userId,
+        customer_email: userEmail && userEmail.includes("@") ? userEmail : undefined,
+        metadata: {
+          user_id: userId,
+        },
+        success_url: successUrl || `${domain}/?payment=success&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: cancelUrl || `${domain}/?payment=canceled`,
+      });
+
+      return res.json({ url: session.url, sessionId: session.id });
+    } catch (error: any) {
+      console.error("[Stripe Checkout Error]:", error);
+      return res.status(500).json({ error: error.message || "Erro ao criar sessão de checkout no Stripe." });
+    }
+  });
+
+  // 2. Webhook do Stripe para Receber Confirmações de Pagamento e Assinatura
+  const handleStripeWebhook = async (req: express.Request, res: express.Response) => {
+    const sig = req.headers["stripe-signature"];
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+    if (!webhookSecret || webhookSecret.trim() === "") {
+      console.warn("[Stripe Webhook] STRIPE_WEBHOOK_SECRET não configurado no servidor.");
+      return res.status(400).send("Webhook secret não configurado.");
+    }
+
+    let event: Stripe.Event;
+
+    try {
+      const stripe = getStripeInstance();
+      const rawBody = (req as any).rawBody || req.body;
+      event = stripe.webhooks.constructEvent(rawBody, sig as string, webhookSecret);
+    } catch (err: any) {
+      console.error(`[Stripe Webhook Error] Assinatura inválida: ${err.message}`);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    console.log(`[Stripe Webhook] Evento recebido com sucesso: ${event.type}`);
+
+    const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseKey) {
+      console.error("[Stripe Webhook] Supabase não configurado.");
+      return res.status(500).send("Configuração do Supabase ausente.");
+    }
+
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    try {
+      switch (event.type) {
+        case "invoice.paid": {
+          const invoice = event.data.object as Stripe.Invoice;
+          const customerId = invoice.customer as string;
+          const subRaw = (invoice as any).subscription;
+          const subscriptionId = (typeof subRaw === "string" ? subRaw : subRaw?.id) || "";
+          
+          console.log(`[Stripe Webhook] Fatura paga com sucesso (invoice.paid) para o cliente ${customerId}`);
+          
+          if (customerId) {
+            await supabase
+              .from("users")
+              .update({
+                status_assinatura: "ativo",
+                stripe_customer_id: customerId,
+                stripe_subscription_id: subscriptionId,
+              })
+              .eq("stripe_customer_id", customerId);
+
+            // Sincroniza também na tabela 'assinaturas' do Supabase
+            await supabase
+              .from("assinaturas")
+              .upsert({
+                stripe_customer_id: customerId,
+                stripe_subscription_id: subscriptionId,
+                status: "active",
+                updated_at: new Date().toISOString()
+              }, { onConflict: "stripe_customer_id" });
+          }
+          break;
+        }
+
+        case "checkout.session.completed": {
+          const session = event.data.object as Stripe.Checkout.Session;
+          const userId = session.client_reference_id || session.metadata?.user_id;
+          const customerId = session.customer as string;
+          const subscriptionId = session.subscription as string;
+
+          if (userId) {
+            console.log(`[Stripe Webhook] Liberando acesso para o usuário ${userId}`);
+            await supabase
+              .from("users")
+              .update({
+                status_assinatura: "ativo",
+                stripe_customer_id: customerId,
+                stripe_subscription_id: subscriptionId,
+              })
+              .eq("id", userId);
+
+            await supabase
+              .from("assinaturas")
+              .upsert({
+                user_id: userId,
+                stripe_customer_id: customerId,
+                stripe_subscription_id: subscriptionId,
+                status: "active",
+                updated_at: new Date().toISOString()
+              }, { onConflict: "user_id" });
+          }
+          break;
+        }
+
+        case "customer.subscription.created":
+        case "customer.subscription.updated": {
+          const subscription = event.data.object as Stripe.Subscription;
+          const customerId = subscription.customer as string;
+          const status = subscription.status; // 'active', 'trialing', 'past_due', 'canceled', 'unpaid'
+          const userId = subscription.metadata?.user_id;
+
+          let statusAssinatura = "bloqueado";
+          let statusDb = "canceled";
+          if (status === "active") {
+            statusAssinatura = "ativo";
+            statusDb = "active";
+          } else if (status === "trialing") {
+            statusAssinatura = "trialing";
+            statusDb = "trialing";
+          }
+
+          console.log(`[Stripe Webhook] Atualizando status de assinatura para ${statusAssinatura} (Stripe status: ${status})`);
+
+          // Tenta atualizar pelo userId do metadata ou pelo stripe_customer_id
+          if (userId) {
+            await supabase
+              .from("users")
+              .update({
+                status_assinatura: statusAssinatura,
+                stripe_subscription_id: subscription.id,
+              })
+              .eq("id", userId);
+
+            await supabase
+              .from("assinaturas")
+              .upsert({
+                user_id: userId,
+                stripe_customer_id: customerId,
+                stripe_subscription_id: subscription.id,
+                status: statusDb,
+                trial_end: subscription.trial_end ? new Date(subscription.trial_end * 1000).toISOString() : null,
+                updated_at: new Date().toISOString()
+              }, { onConflict: "user_id" });
+          } else if (customerId) {
+            await supabase
+              .from("users")
+              .update({
+                status_assinatura: statusAssinatura,
+                stripe_subscription_id: subscription.id,
+              })
+              .eq("stripe_customer_id", customerId);
+
+            await supabase
+              .from("assinaturas")
+              .upsert({
+                stripe_customer_id: customerId,
+                stripe_subscription_id: subscription.id,
+                status: statusDb,
+                trial_end: subscription.trial_end ? new Date(subscription.trial_end * 1000).toISOString() : null,
+                updated_at: new Date().toISOString()
+              }, { onConflict: "stripe_customer_id" });
+          }
+          break;
+        }
+
+        case "customer.subscription.deleted": {
+          const subscription = event.data.object as Stripe.Subscription;
+          const customerId = subscription.customer as string;
+          const userId = subscription.metadata?.user_id;
+
+          console.log(`[Stripe Webhook] Assinatura cancelada/encerrada. Bloqueando usuário...`);
+
+          if (userId) {
+            await supabase
+              .from("users")
+              .update({ status_assinatura: "bloqueado" })
+              .eq("id", userId);
+
+            await supabase
+              .from("assinaturas")
+              .update({ status: "canceled", updated_at: new Date().toISOString() })
+              .eq("user_id", userId);
+          } else if (customerId) {
+            await supabase
+              .from("users")
+              .update({ status_assinatura: "bloqueado" })
+              .eq("stripe_customer_id", customerId);
+
+            await supabase
+              .from("assinaturas")
+              .update({ status: "canceled", updated_at: new Date().toISOString() })
+              .eq("stripe_customer_id", customerId);
+          }
+          break;
+        }
+
+        default:
+          console.log(`[Stripe Webhook] Evento não tratado explicitamente: ${event.type}`);
+      }
+
+      return res.status(200).json({ received: true });
+    } catch (dbErr: any) {
+      console.error("[Stripe Webhook Exception]:", dbErr);
+      return res.status(500).send(`Erro interno ao processar webhook: ${dbErr.message}`);
+    }
+  };
+
+  app.post("/api/webhook/stripe", handleStripeWebhook);
+  app.post("/api/webhooks/stripe", handleStripeWebhook);
+
+  // 3. API para Verificar Validade dos 15 dias de Teste Grátis e Bloqueio Automático
+  app.post("/api/stripe/check-access", async (req, res) => {
+    try {
+      const { userId } = req.body;
+      if (!userId) {
+        return res.status(400).json({ error: "O ID do usuário é obrigatório." });
+      }
+
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
+      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+
+      if (!supabaseUrl || !supabaseKey) {
+        // Se Supabase não estiver configurado, libera por padrão no dev
+        return res.json({ isAllowed: true, isTrial: true, daysRemaining: 15, status: "trialing" });
+      }
+
+      const supabase = createClient(supabaseUrl, supabaseKey);
+      const { data: user, error } = await supabase
+        .from("users")
+        .select("*")
+        .eq("id", userId)
+        .maybeSingle();
+
+      if (error || !user) {
+        return res.json({ isAllowed: true, isTrial: true, daysRemaining: 15, status: "trialing" });
+      }
+
+      // Se o usuário tem status explicitamente ativo de assinatura paga
+      if (user.status_assinatura === "ativo") {
+        return res.json({
+          isAllowed: true,
+          isTrial: false,
+          daysRemaining: 0,
+          status: "ativo",
+          message: "Assinatura Stripe Ativa"
+        });
+      }
+
+      // Se está bloqueado manualmente
+      if (user.status_assinatura === "bloqueado") {
+        return res.json({
+          isAllowed: false,
+          isTrial: false,
+          daysRemaining: 0,
+          status: "bloqueado",
+          message: "Acesso bloqueado. Realize a assinatura de R$ 25,00 para continuar."
+        });
+      }
+
+      // Cálculo dos 15 dias de teste grátis a partir do cadastro (created_at)
+      const createdAt = new Date(user.created_at || Date.now());
+      const now = new Date();
+      const diffInTime = now.getTime() - createdAt.getTime();
+      const diffInDays = Math.floor(diffInTime / (1000 * 3600 * 24));
+      const trialDuration = 15;
+      const daysRemaining = Math.max(0, trialDuration - diffInDays);
+
+      if (diffInDays >= trialDuration) {
+        // Passaram os 15 dias e não possui pagamento ativo -> Atualiza no banco para bloqueado
+        await supabase
+          .from("users")
+          .update({ status_assinatura: "bloqueado" })
+          .eq("id", userId);
+
+        return res.json({
+          isAllowed: false,
+          isTrial: false,
+          daysRemaining: 0,
+          status: "bloqueado",
+          message: "Seu período de teste grátis de 15 dias expirou. Faça o upgrade por R$ 25,00/mês para desbloquear seu sistema!"
+        });
+      }
+
+      // Ainda dentro dos 15 dias de teste grátis
+      return res.json({
+        isAllowed: true,
+        isTrial: true,
+        daysRemaining: daysRemaining,
+        status: "trialing",
+        message: `Período de Teste Grátis Ativo: restam ${daysRemaining} dias.`
+      });
+    } catch (err: any) {
+      console.error("[Stripe Check Access Error]:", err);
+      return res.json({ isAllowed: true, isTrial: true, daysRemaining: 15, status: "trialing" });
+    }
+  });
 
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok" });
