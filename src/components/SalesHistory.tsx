@@ -105,13 +105,6 @@ export function SalesHistory({
     if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) {
       return clean;
     }
-    if (clean.includes("T00:00:00") || clean.includes(" 00:00:00") || clean.includes("T03:00:00")) {
-      return clean.substring(0, 10);
-    }
-    const isUtcMidnight = (clean.endsWith("Z") || clean.includes("+00")) && (clean.includes("T00:00:00") || clean.includes(" 00:00:00"));
-    if (isUtcMidnight) {
-      return clean.substring(0, 10);
-    }
     try {
       const d = new Date(clean);
       if (isNaN(d.getTime())) return clean.substring(0, 10);
@@ -212,7 +205,7 @@ export function SalesHistory({
   };
 
   const getCreatedDateLocal = (item: Sale) => {
-    return getLocalDateFromISO(item.orderDate || item.date || "");
+    return getLocalDateFromISO(item.date || item.orderDate || "");
   };
 
   const getBaixaDateLocal = (item: Sale) => {
@@ -240,11 +233,10 @@ export function SalesHistory({
       return true;
     }
 
-    const useBaixaDate = activeStatusFilter === "paid";
-    const targetLocalDate = useBaixaDate ? getBaixaDateLocal(sale) : getCreatedDateLocal(sale);
-    const rawDateToCheck = useBaixaDate 
-      ? (sale.deliveryDate || sale.date) 
-      : (sale.orderDate || sale.date);
+    const createdDate = getLocalDateFromISO(sale.date);
+    const orderDateClean = sale.orderDate ? getLocalDateFromISO(sale.orderDate) : "";
+    const deliveryDateClean = sale.deliveryDate ? getLocalDateFromISO(sale.deliveryDate) : "";
+    const paymentDatesClean = (sale.payments || []).map(p => getLocalDateFromISO(p.date)).filter(Boolean);
 
     if (activeDateFilter === "today") {
       const localDate = new Date();
@@ -252,22 +244,46 @@ export function SalesHistory({
       const month = String(localDate.getMonth() + 1).padStart(2, '0');
       const day = String(localDate.getDate()).padStart(2, '0');
       const todayStr = `${year}-${month}-${day}`;
-      return targetLocalDate === todayStr;
+
+      return (
+        createdDate === todayStr ||
+        orderDateClean === todayStr ||
+        deliveryDateClean === todayStr ||
+        paymentDatesClean.includes(todayStr)
+      );
     }
 
     if (activeDateFilter === "week") {
-      return isDateInCurrentWeek(targetLocalDate);
+      return (
+        isDateInCurrentWeek(createdDate) ||
+        (orderDateClean ? isDateInCurrentWeek(orderDateClean) : false) ||
+        (deliveryDateClean ? isDateInCurrentWeek(deliveryDateClean) : false) ||
+        paymentDatesClean.some(d => isDateInCurrentWeek(d))
+      );
     }
     
     if (activeDateFilter === "custom") {
-      if (!rawDateToCheck) return false;
       if (activeStartDate && activeEndDate) {
-        return targetLocalDate >= activeStartDate && targetLocalDate <= activeEndDate;
+        return (
+          (createdDate >= activeStartDate && createdDate <= activeEndDate) ||
+          (orderDateClean >= activeStartDate && orderDateClean <= activeEndDate) ||
+          (deliveryDateClean >= activeStartDate && deliveryDateClean <= activeEndDate) ||
+          paymentDatesClean.some(d => d >= activeStartDate && d <= activeEndDate)
+        );
       }
-      return targetLocalDate === activeSelectedDate;
+      return (
+        createdDate === activeSelectedDate ||
+        orderDateClean === activeSelectedDate ||
+        deliveryDateClean === activeSelectedDate ||
+        paymentDatesClean.includes(activeSelectedDate)
+      );
     }
 
     return true; // "all"
+  }).sort((a, b) => {
+    const timeA = new Date(a.date).getTime() || 0;
+    const timeB = new Date(b.date).getTime() || 0;
+    return timeB - timeA;
   });
 
   const filteredBudgets = budgets.filter((budget) => {

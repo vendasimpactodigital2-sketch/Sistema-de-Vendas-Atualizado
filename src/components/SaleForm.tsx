@@ -92,13 +92,6 @@ export function SaleForm({
     if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) {
       return clean;
     }
-    if (clean.includes("T00:00:00") || clean.includes(" 00:00:00") || clean.includes("T03:00:00")) {
-      return clean.substring(0, 10);
-    }
-    const isUtcMidnight = (clean.endsWith("Z") || clean.includes("+00")) && (clean.includes("T00:00:00") || clean.includes(" 00:00:00"));
-    if (isUtcMidnight) {
-      return clean.substring(0, 10);
-    }
     try {
       const d = new Date(clean);
       if (isNaN(d.getTime())) return clean.substring(0, 10);
@@ -122,7 +115,13 @@ export function SaleForm({
     return localStorage.getItem("NUCLEO_CART_CLIENT_PHONE") || "";
   });
   const [orderDate, setOrderDate] = useState(() => {
-    return localStorage.getItem("NUCLEO_CART_ORDER_DATE") || getLocalDateString();
+    const today = getLocalDateString();
+    const saved = localStorage.getItem("NUCLEO_CART_ORDER_DATE");
+    if (saved && saved.length === 10 && saved < today) {
+      // If cached cart order date is from an old day, reset to today
+      return today;
+    }
+    return saved || today;
   });
   const [deliveryDate, setDeliveryDate] = useState(() => {
     return localStorage.getItem("NUCLEO_CART_DELIVERY_DATE") || "";
@@ -1046,7 +1045,7 @@ export function SaleForm({
     const actualDownPayment = isQuickSale ? finalTotalValue : downPayment;
     const actualBalanceDue = isQuickSale ? 0 : balanceDueValue;
     const actualDate = isQuickSale ? new Date().toISOString() : (activeEditingSale?.date || new Date().toISOString());
-    const actualOrderDate = isQuickSale ? getLocalDateString() : (orderDate || undefined);
+    const actualOrderDate = isQuickSale ? getLocalDateString() : (orderDate || getLocalDateString());
     const actualDeliveryDate = isQuickSale ? getLocalDateString() : (deliveryDate || undefined);
 
     const savedSale: Sale = {

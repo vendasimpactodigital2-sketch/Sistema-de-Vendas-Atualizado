@@ -123,13 +123,6 @@ export const getLocalDateFromISO = (isoStr: string): string => {
   if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) {
     return clean;
   }
-  if (clean.includes("T00:00:00") || clean.includes(" 00:00:00") || clean.includes("T03:00:00")) {
-    return clean.substring(0, 10);
-  }
-  const isUtcMidnight = (clean.endsWith("Z") || clean.includes("+00")) && (clean.includes("T00:00:00") || clean.includes(" 00:00:00"));
-  if (isUtcMidnight) {
-    return clean.substring(0, 10);
-  }
   try {
     const d = new Date(clean);
     if (isNaN(d.getTime())) return clean.substring(0, 10);
@@ -1892,18 +1885,42 @@ export default function App() {
       }
 
       // Filter by date
-      const saleLocalDate = getLocalDateFromISO(sale.date);
+      const createdDate = getLocalDateFromISO(sale.date);
+      const orderDateClean = sale.orderDate ? getLocalDateFromISO(sale.orderDate) : "";
+      const deliveryDateClean = sale.deliveryDate ? getLocalDateFromISO(sale.deliveryDate) : "";
+      const paymentDatesClean = (sale.payments || []).map(p => getLocalDateFromISO(p.date)).filter(Boolean);
+
       if (filterPeriod === "today") {
-        return saleLocalDate === todayStr;
+        return (
+          createdDate === todayStr ||
+          orderDateClean === todayStr ||
+          deliveryDateClean === todayStr ||
+          paymentDatesClean.includes(todayStr)
+        );
       }
       if (filterPeriod === "week") {
-        return new Date(sale.date) >= oneWeekAgo;
+        return (
+          new Date(sale.date) >= oneWeekAgo ||
+          (orderDateClean ? isDateInCurrentWeek(orderDateClean) : false) ||
+          (deliveryDateClean ? isDateInCurrentWeek(deliveryDateClean) : false) ||
+          paymentDatesClean.some(d => isDateInCurrentWeek(d))
+        );
       }
       if (filterPeriod === "custom") {
         if (customStartDate && customEndDate) {
-          return saleLocalDate >= customStartDate && saleLocalDate <= customEndDate;
+          return (
+            (createdDate >= customStartDate && createdDate <= customEndDate) ||
+            (orderDateClean >= customStartDate && orderDateClean <= customEndDate) ||
+            (deliveryDateClean >= customStartDate && deliveryDateClean <= customEndDate) ||
+            paymentDatesClean.some(d => d >= customStartDate && d <= customEndDate)
+          );
         }
-        return saleLocalDate === customDate;
+        return (
+          createdDate === customDate ||
+          orderDateClean === customDate ||
+          deliveryDateClean === customDate ||
+          paymentDatesClean.includes(customDate)
+        );
       }
       return true;
     });
@@ -3409,8 +3426,12 @@ export default function App() {
       if (exists) {
         return prev.map((s) => (s.id === newSale.id ? newSale : s));
       }
-      return [...prev, newSale];
+      return [newSale, ...prev];
     });
+    // Auto-reset filters so new sales are immediately visible in Vendas do dia
+    setSalesStatusFilter("all");
+    setSalesDateFilter("today");
+    setFilterPeriod("today");
     setActiveEditingSale(null);
 
     if (currentUser && isSupabaseConfigured()) {
