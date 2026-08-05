@@ -1887,39 +1887,26 @@ export default function App() {
       // Filter by date
       const createdDate = getLocalDateFromISO(sale.date);
       const orderDateClean = sale.orderDate ? getLocalDateFromISO(sale.orderDate) : "";
-      const deliveryDateClean = sale.deliveryDate ? getLocalDateFromISO(sale.deliveryDate) : "";
-      const paymentDatesClean = (sale.payments || []).map(p => getLocalDateFromISO(p.date)).filter(Boolean);
 
       if (filterPeriod === "today") {
-        return (
-          createdDate === todayStr ||
-          orderDateClean === todayStr ||
-          deliveryDateClean === todayStr ||
-          paymentDatesClean.includes(todayStr)
-        );
+        return createdDate === todayStr || orderDateClean === todayStr;
       }
       if (filterPeriod === "week") {
         return (
           new Date(sale.date) >= oneWeekAgo ||
-          (orderDateClean ? isDateInCurrentWeek(orderDateClean) : false) ||
-          (deliveryDateClean ? isDateInCurrentWeek(deliveryDateClean) : false) ||
-          paymentDatesClean.some(d => isDateInCurrentWeek(d))
+          (orderDateClean ? isDateInCurrentWeek(orderDateClean) : false)
         );
       }
       if (filterPeriod === "custom") {
         if (customStartDate && customEndDate) {
           return (
             (createdDate >= customStartDate && createdDate <= customEndDate) ||
-            (orderDateClean >= customStartDate && orderDateClean <= customEndDate) ||
-            (deliveryDateClean >= customStartDate && deliveryDateClean <= customEndDate) ||
-            paymentDatesClean.some(d => d >= customStartDate && d <= customEndDate)
+            (orderDateClean >= customStartDate && orderDateClean <= customEndDate)
           );
         }
         return (
           createdDate === customDate ||
-          orderDateClean === customDate ||
-          deliveryDateClean === customDate ||
-          paymentDatesClean.includes(customDate)
+          orderDateClean === customDate
         );
       }
       return true;

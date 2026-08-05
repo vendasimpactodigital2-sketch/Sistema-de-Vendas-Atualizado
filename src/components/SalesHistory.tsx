@@ -235,8 +235,6 @@ export function SalesHistory({
 
     const createdDate = getLocalDateFromISO(sale.date);
     const orderDateClean = sale.orderDate ? getLocalDateFromISO(sale.orderDate) : "";
-    const deliveryDateClean = sale.deliveryDate ? getLocalDateFromISO(sale.deliveryDate) : "";
-    const paymentDatesClean = (sale.payments || []).map(p => getLocalDateFromISO(p.date)).filter(Boolean);
 
     if (activeDateFilter === "today") {
       const localDate = new Date();
@@ -245,20 +243,13 @@ export function SalesHistory({
       const day = String(localDate.getDate()).padStart(2, '0');
       const todayStr = `${year}-${month}-${day}`;
 
-      return (
-        createdDate === todayStr ||
-        orderDateClean === todayStr ||
-        deliveryDateClean === todayStr ||
-        paymentDatesClean.includes(todayStr)
-      );
+      return createdDate === todayStr || orderDateClean === todayStr;
     }
 
     if (activeDateFilter === "week") {
       return (
         isDateInCurrentWeek(createdDate) ||
-        (orderDateClean ? isDateInCurrentWeek(orderDateClean) : false) ||
-        (deliveryDateClean ? isDateInCurrentWeek(deliveryDateClean) : false) ||
-        paymentDatesClean.some(d => isDateInCurrentWeek(d))
+        (orderDateClean ? isDateInCurrentWeek(orderDateClean) : false)
       );
     }
     
@@ -266,16 +257,12 @@ export function SalesHistory({
       if (activeStartDate && activeEndDate) {
         return (
           (createdDate >= activeStartDate && createdDate <= activeEndDate) ||
-          (orderDateClean >= activeStartDate && orderDateClean <= activeEndDate) ||
-          (deliveryDateClean >= activeStartDate && deliveryDateClean <= activeEndDate) ||
-          paymentDatesClean.some(d => d >= activeStartDate && d <= activeEndDate)
+          (orderDateClean >= activeStartDate && orderDateClean <= activeEndDate)
         );
       }
       return (
         createdDate === activeSelectedDate ||
-        orderDateClean === activeSelectedDate ||
-        deliveryDateClean === activeSelectedDate ||
-        paymentDatesClean.includes(activeSelectedDate)
+        orderDateClean === activeSelectedDate
       );
     }
 
