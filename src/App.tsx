@@ -1811,7 +1811,30 @@ export default function App() {
     }, 0);
   }, [todaysDeliveries]);
 
-  const [filterPeriod, setFilterPeriod] = useState<"all" | "today" | "week" | "custom">("today");
+  const isDateInCurrentWeek = (dateStr: string): boolean => {
+    if (!dateStr) return false;
+    const target = new Date(dateStr + "T12:00:00");
+    if (isNaN(target.getTime())) return false;
+    const now = new Date();
+    const currentDayOfWeek = now.getDay();
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(now.getDate() - currentDayOfWeek);
+    startOfWeek.setHours(0, 0, 0, 0);
+    const endOfWeek = new Date(startOfWeek);
+    endOfWeek.setDate(startOfWeek.getDate() + 6);
+    endOfWeek.setHours(23, 59, 59, 999);
+    return target >= startOfWeek && target <= endOfWeek;
+  };
+
+  const isDateInCurrentMonth = (dateStr: string): boolean => {
+    if (!dateStr) return false;
+    const target = new Date(dateStr + "T12:00:00");
+    if (isNaN(target.getTime())) return false;
+    const now = new Date();
+    return target.getFullYear() === now.getFullYear() && target.getMonth() === now.getMonth();
+  };
+
+  const [filterPeriod, setFilterPeriod] = useState<"all" | "today" | "week" | "month" | "custom">("today");
   const [customDate, setCustomDate] = useState<string>(() => {
     const localDate = new Date();
     const year = localDate.getFullYear();
@@ -1833,10 +1856,8 @@ export default function App() {
     return `${year}-${month}-${day}`;
   });
 
-
-
   const [salesStatusFilter, setSalesStatusFilter] = useState<"all" | "pending" | "paid" >("all");
-  const [salesDateFilter, setSalesDateFilter] = useState<"today" | "week" | "all" | "custom">("today");
+  const [salesDateFilter, setSalesDateFilter] = useState<"today" | "week" | "month" | "all" | "custom">("today");
 
   // Sync filterPeriod and salesDateFilter to make the dashboard unified
   React.useEffect(() => {
@@ -1846,6 +1867,8 @@ export default function App() {
       setSalesDateFilter("custom");
     } else if (filterPeriod === "week" && salesDateFilter !== "week") {
       setSalesDateFilter("week");
+    } else if (filterPeriod === "month" && salesDateFilter !== "month") {
+      setSalesDateFilter("month");
     } else if (filterPeriod === "all" && salesDateFilter !== "all") {
       setSalesDateFilter("all");
     }
@@ -1858,6 +1881,8 @@ export default function App() {
       setFilterPeriod("custom");
     } else if (salesDateFilter === "week" && filterPeriod !== "week") {
       setFilterPeriod("week");
+    } else if (salesDateFilter === "month" && filterPeriod !== "month") {
+      setFilterPeriod("month");
     } else if (salesDateFilter === "all" && filterPeriod !== "all") {
       setFilterPeriod("all");
     }
@@ -1895,6 +1920,12 @@ export default function App() {
         return (
           new Date(sale.date) >= oneWeekAgo ||
           (orderDateClean ? isDateInCurrentWeek(orderDateClean) : false)
+        );
+      }
+      if (filterPeriod === "month") {
+        return (
+          isDateInCurrentMonth(createdDate) ||
+          (orderDateClean ? isDateInCurrentMonth(orderDateClean) : false)
         );
       }
       if (filterPeriod === "custom") {

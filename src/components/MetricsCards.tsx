@@ -5,7 +5,7 @@ import { Sale, Expense, getSaleOrderDate, getSaleOperationCost, isQuickSaleClien
 interface MetricsCardsProps {
   sales: Sale[];
   expenses?: Expense[];
-  filterPeriod?: "all" | "today" | "week" | "custom";
+  filterPeriod?: "all" | "today" | "week" | "month" | "custom";
   customDate?: string;
   customStartDate?: string;
   customEndDate?: string;

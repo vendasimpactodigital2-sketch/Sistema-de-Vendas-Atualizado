@@ -17,7 +17,16 @@ import {
   Check,
   Coins,
   AlertCircle,
-  AlertTriangle
+  AlertTriangle,
+  FileText,
+  CheckCircle2,
+  Clock,
+  Sparkles,
+  ShieldCheck,
+  ArrowRight,
+  ListFilter,
+  Layers,
+  FileCheck
 } from "lucide-react";
 import React, { useState } from "react";
 import { Sale, CompanyProfile, getSaleOrderDate, isQuickSaleClient, isPendingRetiradaOrBaixa } from "../types";
@@ -28,24 +37,25 @@ import { parseClientImages } from "../supabase";
 interface SalesHistoryProps {
   sales: Sale[];
   budgets?: Sale[];
-  onDeleteSale: (id: string) => void;
+  onDeleteSale?: (id: string) => void;
   onDeleteBudget?: (id: string) => void;
-  onEditSale: (sale: Sale) => void;
+  onEditSale?: (sale: Sale) => void;
   onEditBudget?: (budget: Sale) => void;
   onExecuteBudget?: (budget: Sale) => void;
-  onImportBackup: (importedSales: Sale[]) => void;
+  onImportBackup?: (importedSales: Sale[]) => void;
   company: CompanyProfile;
   onSaveSale?: (sale: Sale) => void;
   statusFilter?: "all" | "pending" | "paid";
   setStatusFilter?: (status: "all" | "pending" | "paid") => void;
-  dateFilter?: "today" | "week" | "all" | "custom";
-  setDateFilter?: (date: "today" | "week" | "all" | "custom") => void;
+  dateFilter?: "today" | "week" | "month" | "all" | "custom";
+  setDateFilter?: (date: "today" | "week" | "month" | "all" | "custom") => void;
   customDate?: string;
   setCustomDate?: (date: string) => void;
   customStartDate?: string;
   customEndDate?: string;
   setCustomStartDate?: (date: string) => void;
   setCustomEndDate?: (date: string) => void;
+  initialView?: "sales" | "budgets";
 }
 
 export function SalesHistory({
@@ -68,11 +78,19 @@ export function SalesHistory({
   customStartDate,
   customEndDate,
   setCustomStartDate,
-  setCustomEndDate
+  setCustomEndDate,
+  initialView = "sales"
 }: SalesHistoryProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
-  const [currentView, setCurrentView] = useState<"sales" | "budgets">("sales");
+  const [currentView, setCurrentView] = useState<"sales" | "budgets">(initialView);
+
+  // Sync initialView if changed externally
+  React.useEffect(() => {
+    if (initialView) {
+      setCurrentView(initialView);
+    }
+  }, [initialView]);
   
   // State variables for quick pay/delivery modal
   const [quickPaySale, setQuickPaySale] = useState<Sale | null>(null);
@@ -85,6 +103,7 @@ export function SalesHistory({
   const [saleToDelete, setSaleToDelete] = useState<Sale | null>(null);
   const [budgetToDelete, setBudgetToDelete] = useState<Sale | null>(null);
   const [budgetToExecute, setBudgetToExecute] = useState<Sale | null>(null);
+  const [executeSaleDateOption, setExecuteSaleDateOption] = useState<"today" | "original">("today");
   const [overpaidWarningInfo, setOverpaidWarningInfo] = useState<{
     amountPaidNow: number;
     quickPaySale: Sale;
@@ -125,8 +144,6 @@ export function SalesHistory({
     const dayOfWeek = today.getDay(); // 0 is Sunday, 1 is Monday, ..., 6 is Saturday
     
     // We want Monday (Segunda-feira) as start of current week.
-    // If today is Sunday (0), Monday is 6 days ago.
-    // Else it is (dayOfWeek - 1) days ago.
     const daysSinceMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
     
     const monday = new Date(today);
@@ -149,11 +166,19 @@ export function SalesHistory({
     return normalized >= mondayStr && normalized <= sundayStr;
   };
 
+  const isDateInCurrentMonth = (dateStr: string): boolean => {
+    if (!dateStr) return false;
+    const normalized = dateStr.substring(0, 10);
+    const today = new Date();
+    const currentMonthPrefix = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+    return normalized.startsWith(currentMonthPrefix);
+  };
+
   const [localStatusFilter, setLocalStatusFilter] = useState<"all" | "pending" | "paid">("all");
   const activeStatusFilter = statusFilter !== undefined ? statusFilter : localStatusFilter;
   const activeSetStatusFilter = setStatusFilter !== undefined ? setStatusFilter : setLocalStatusFilter;
 
-  const [localDateFilter, setLocalDateFilter] = useState<"today" | "week" | "all" | "custom">("today");
+  const [localDateFilter, setLocalDateFilter] = useState<"today" | "week" | "month" | "all" | "custom">("today");
   const activeDateFilter = dateFilter !== undefined ? dateFilter : localDateFilter;
   const activeSetDateFilter = setDateFilter !== undefined ? setDateFilter : setLocalDateFilter;
 
@@ -252,6 +277,13 @@ export function SalesHistory({
         (orderDateClean ? isDateInCurrentWeek(orderDateClean) : false)
       );
     }
+
+    if (activeDateFilter === "month") {
+      return (
+        isDateInCurrentMonth(createdDate) ||
+        (orderDateClean ? isDateInCurrentMonth(orderDateClean) : false)
+      );
+    }
     
     if (activeDateFilter === "custom") {
       if (activeStartDate && activeEndDate) {
@@ -297,6 +329,10 @@ export function SalesHistory({
     if (activeDateFilter === "week") {
       return isDateInCurrentWeek(targetLocalDate);
     }
+
+    if (activeDateFilter === "month") {
+      return isDateInCurrentMonth(targetLocalDate);
+    }
     
     if (activeDateFilter === "custom") {
       if (!rawDateToCheck) return false;
@@ -307,7 +343,26 @@ export function SalesHistory({
     }
 
     return true; // "all"
+  }).sort((a, b) => {
+    const timeA = new Date(a.date || a.orderDate || 0).getTime() || 0;
+    const timeB = new Date(b.date || b.orderDate || 0).getTime() || 0;
+    return timeB - timeA;
   });
+
+  // KPI Calculations for Budgets
+  const budgetKPIs = React.useMemo(() => {
+    const totalCount = filteredBudgets.length;
+    const totalEstimatedValue = filteredBudgets.reduce((acc, b) => acc + (b.totalValue || 0), 0);
+    const totalDownPayment = filteredBudgets.reduce((acc, b) => acc + (b.downPayment || 0), 0);
+    const totalBalanceToBill = Math.max(0, totalEstimatedValue - totalDownPayment);
+
+    return {
+      totalCount,
+      totalEstimatedValue,
+      totalDownPayment,
+      totalBalanceToBill
+    };
+  }, [filteredBudgets]);
 
   // Quick PDF generator helper for previous items
   const handleDownloadPDF = async (sale: Sale) => {
@@ -884,13 +939,14 @@ export function SalesHistory({
     
     // Today's date string
     const localDate = new Date();
-    const year = localDate.getFullYear();
-    const month = String(localDate.getMonth() + 1).padStart(2, '0');
-    const day = String(localDate.getDate()).padStart(2, '0');
-    const todayStr = `${year}-${month}-${day}`;
+    const currentYear = localDate.getFullYear();
+    const currentMonthStr = String(localDate.getMonth() + 1).padStart(2, '0');
+    const currentDayStr = String(localDate.getDate()).padStart(2, '0');
+    const todayStr = `${currentYear}-${currentMonthStr}-${currentDayStr}`;
 
     let today = 0;
     let week = 0;
+    let month = 0;
     let all = 0;
     let custom = 0;
 
@@ -937,6 +993,11 @@ export function SalesHistory({
       if (isDateInCurrentWeek(targetLocalDate)) {
         week++;
       }
+
+      // Month check
+      if (isDateInCurrentMonth(targetLocalDate)) {
+        month++;
+      }
       
       // Custom date check
       if (activeStartDate && activeEndDate) {
@@ -948,7 +1009,7 @@ export function SalesHistory({
       }
     });
 
-    return { today, week, all, custom };
+    return { today, week, month, all, custom };
   }, [sales, budgets, currentView, activeSelectedDate, activeStartDate, activeEndDate, searchTerm, activeStatusFilter]);
 
   return (
@@ -958,12 +1019,12 @@ export function SalesHistory({
         <div>
           <h2 className="text-xl font-black text-white flex items-center gap-2">
             <span className={`h-5 w-1.5 rounded ${currentView === "sales" ? "bg-brand-magenta" : "bg-brand-cyan"}`}></span>
-            {currentView === "sales" ? "Histórico e Listagem de Vendas" : "Histórico e Listagem de Orçamentos"}
+            {currentView === "sales" ? "Histórico e Listagem de Vendas" : "Painel & Relatório de Orçamentos"}
           </h2>
           <p className="text-xs text-slate-400 mt-1">
             {currentView === "sales" 
-              ? `Total de ${filteredSales.length} vendas registradas`
-              : `Total de ${filteredBudgets.length} orçamentos registrados`
+              ? `Total de ${filteredSales.length} vendas registradas no período`
+              : `Total de ${filteredBudgets.length} orçamentos registrados (aguardando autorização para virar venda)`
             }
           </p>
         </div>
@@ -1001,6 +1062,69 @@ export function SalesHistory({
         </div>
       </div>
 
+      {/* KPI Cards when viewing Budgets */}
+      {currentView === "budgets" && (
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="bg-slate-950/70 border border-slate-800 p-3.5 rounded-xl flex items-center justify-between">
+              <div>
+                <p className="text-[10px] uppercase font-bold text-slate-400">Qtd. Orçamentos</p>
+                <p className="text-xl font-black text-white mt-0.5">{budgetKPIs.totalCount}</p>
+                <p className="text-[10px] text-brand-cyan mt-0.5">
+                  {activeDateFilter === "today" ? "Do dia de hoje" : activeDateFilter === "week" ? "Desta semana" : activeDateFilter === "month" ? "Deste mês" : activeDateFilter === "custom" ? "Período selecionado" : "Todos os registros"}
+                </p>
+              </div>
+              <div className="h-9 w-9 rounded-lg bg-brand-cyan/15 border border-brand-cyan/30 flex items-center justify-center text-brand-cyan">
+                <FileText className="h-5 w-5" />
+              </div>
+            </div>
+
+            <div className="bg-slate-950/70 border border-slate-800 p-3.5 rounded-xl flex items-center justify-between">
+              <div>
+                <p className="text-[10px] uppercase font-bold text-slate-400">Total Previsto</p>
+                <p className="text-xl font-black text-brand-cyan mt-0.5">{formatBRL(budgetKPIs.totalEstimatedValue)}</p>
+                <p className="text-[10px] text-slate-400 mt-0.5">Valor bruto das propostas</p>
+              </div>
+              <div className="h-9 w-9 rounded-lg bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
+                <DollarSign className="h-5 w-5" />
+              </div>
+            </div>
+
+            <div className="bg-slate-950/70 border border-slate-800 p-3.5 rounded-xl flex items-center justify-between">
+              <div>
+                <p className="text-[10px] uppercase font-bold text-slate-400">Sinais / Entradas</p>
+                <p className="text-xl font-black text-emerald-400 mt-0.5">{formatBRL(budgetKPIs.totalDownPayment)}</p>
+                <p className="text-[10px] text-slate-400 mt-0.5">Adiantamentos pagos</p>
+              </div>
+              <div className="h-9 w-9 rounded-lg bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+                <Coins className="h-5 w-5" />
+              </div>
+            </div>
+
+            <div className="bg-slate-950/70 border border-slate-800 p-3.5 rounded-xl flex items-center justify-between">
+              <div>
+                <p className="text-[10px] uppercase font-bold text-slate-400">Saldo a Faturar</p>
+                <p className="text-xl font-black text-amber-400 mt-0.5">{formatBRL(budgetKPIs.totalBalanceToBill)}</p>
+                <p className="text-[10px] text-slate-400 mt-0.5">A receber após autorização</p>
+              </div>
+              <div className="h-9 w-9 rounded-lg bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                <Clock className="h-5 w-5" />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-gradient-to-r from-cyan-950/40 via-slate-950/50 to-emerald-950/30 border border-cyan-500/20 p-3 rounded-xl flex items-center gap-3 text-xs text-slate-300">
+            <ShieldCheck className="h-5 w-5 text-brand-cyan shrink-0" />
+            <div className="flex-1">
+              <span className="font-bold text-brand-cyan">Controle de Autorização de Orçamento:</span>
+              <span className="text-slate-300 ml-1">
+                Estes registros são propostas comerciais. Eles <strong>NÃO</strong> entram no faturamento de vendas do dia nem no caixa até você autorizar. Para aprovar um orçamento e lançá-lo como venda oficial, clique em <strong>AUTORIZAR</strong>.
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ROW 2: CONTROL BAR (ALIGN EVERYTHING PERFECTLY) */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-slate-900/20 p-4 rounded-xl border border-slate-850/50">
         {/* Left Span: Filters Group */}
@@ -1028,8 +1152,9 @@ export function SalesHistory({
           {/* Date Filters Group with counts on the LEFT side */}
           <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-850 overflow-x-auto w-full md:w-auto shrink-0">
             {([
-              { key: "today", label: "Hoje", count: counts.today },
+              { key: "today", label: "Hoje (Dia)", count: counts.today },
               { key: "week", label: "Esta Semana", count: counts.week },
+              { key: "month", label: "Este Mês", count: counts.month },
               { key: "all", label: "Todas", count: counts.all },
               { key: "custom", label: "Por Data", count: counts.custom }
             ] as const).map(({ key, label, count }) => (
@@ -1039,19 +1164,20 @@ export function SalesHistory({
                 onClick={() => activeSetDateFilter(key)}
                 className={`flex-1 md:flex-none px-2.5 py-1.5 text-[10px] sm:text-xs font-bold uppercase rounded-lg transition-all flex items-center justify-center gap-1.5 shrink-0 whitespace-nowrap ${
                   activeDateFilter === key
-                    ? "bg-brand-magenta/15 text-brand-magenta border border-brand-magenta/30 shadow-sm"
+                    ? currentView === "sales" 
+                      ? "bg-brand-magenta/15 text-brand-magenta border border-brand-magenta/30 shadow-sm"
+                      : "bg-brand-cyan/20 text-brand-cyan border border-brand-cyan/40 shadow-sm"
                     : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/50"
                 }`}
               >
-                {/* Dynamically synchronized count on the LEFT side of label */}
-                <span className={`px-1.5 py-0.2 rounded font-mono text-[9.5px] transition-colors leading-normal ${
-                  activeDateFilter === key
-                    ? "bg-brand-magenta text-slate-950 font-black"
+                <span>{label}</span>
+                <span className={`px-1.5 py-0.2 rounded-full text-[9px] font-mono ${
+                  activeDateFilter === key 
+                    ? currentView === "sales" ? "bg-brand-magenta text-white" : "bg-brand-cyan text-slate-950 font-bold"
                     : "bg-slate-850 text-slate-400"
                 }`}>
                   {count}
                 </span>
-                <span>{label}</span>
               </button>
             ))}
           </div>
@@ -1372,17 +1498,23 @@ export function SalesHistory({
 
                       {/* Quantity of items */}
                       <td className="p-4 text-center text-slate-300 font-mono">
-                        {budget.items.length}
+                        <span className="bg-slate-900 px-2 py-0.5 rounded border border-slate-800 text-[11px] font-bold">
+                          {budget.items.length} {budget.items.length === 1 ? 'item' : 'itens'}
+                        </span>
                       </td>
 
                       {/* Sum items total */}
-                      <td className="p-4 text-right text-brand-cyan font-bold font-mono">
+                      <td className="p-4 text-right text-brand-cyan font-bold font-mono text-sm">
                         {formatBRL(budget.totalValue)}
                       </td>
 
                       {/* Down payment / Signal received */}
                       <td className="p-4 text-right font-mono">
-                        <div className="text-emerald-400 font-semibold">{formatBRL(budget.downPayment)}</div>
+                        {budget.downPayment > 0 ? (
+                          <div className="text-emerald-400 font-semibold">{formatBRL(budget.downPayment)}</div>
+                        ) : (
+                          <div className="text-slate-500 text-[11px]">Sem sinal</div>
+                        )}
                       </td>
 
                       {/* Service Visual Image */}
@@ -1406,12 +1538,15 @@ export function SalesHistory({
                           {/* EXECUTE BUDGET (Convert to sale) */}
                           <button
                             type="button"
-                            onClick={() => setBudgetToExecute(budget)}
-                            className="p-1 px-2.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[10px] uppercase tracking-wider flex items-center gap-1 cursor-pointer transition-all hover:scale-[1.03]"
-                            title="Executar este Orçamento (Inserir como venda oficial no sistema)"
+                            onClick={() => {
+                              setExecuteSaleDateOption("today");
+                              setBudgetToExecute(budget);
+                            }}
+                            className="p-1 px-3 rounded-lg bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white font-black text-[10px] uppercase tracking-wider flex items-center gap-1.5 cursor-pointer transition-all shadow-md shadow-emerald-950/40 hover:scale-[1.03]"
+                            title="Autorizar este Orçamento e converter em Venda Oficial"
                           >
-                            <Check className="h-3.5 w-3.5" />
-                            <span>EXECUTAR</span>
+                            <CheckCircle2 className="h-3.5 w-3.5 text-white" />
+                            <span>AUTORIZAR</span>
                           </button>
 
                           <button
@@ -1440,7 +1575,7 @@ export function SalesHistory({
                             title="Carregar orçamento para edição"
                           >
                             <Edit2 className="h-3.5 w-3.5" />
-                            <span className="text-[10px] uppercase font-bold font-bold">Editar</span>
+                            <span className="text-[10px] uppercase font-bold">Editar</span>
                           </button>
 
                           <button
@@ -1823,27 +1958,107 @@ export function SalesHistory({
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-md bg-brand-card border border-slate-800 p-6 rounded-2xl space-y-6 shadow-2xl text-left"
+              className="w-full max-w-lg bg-brand-card border border-slate-800 p-6 rounded-2xl space-y-5 shadow-2xl text-left"
             >
-              <div className="flex items-start gap-3.5">
-                <div className="p-3 bg-emerald-950/60 text-emerald-400 rounded-xl border border-emerald-900/30">
-                  <Check className="h-6 w-6" />
+              <div className="flex items-start gap-3.5 border-b border-slate-850 pb-4">
+                <div className="p-3 bg-emerald-950/80 text-emerald-400 rounded-xl border border-emerald-800/40">
+                  <CheckCircle2 className="h-6 w-6" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-white text-base">Executar e Converter Orçamento</h3>
-                  <p className="text-xs text-slate-400 mt-1">Deseja realmente aprovar e registrar este orçamento como uma venda oficial no sistema?</p>
+                  <h3 className="font-bold text-white text-base">Autorizar e Converter em Venda</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Este orçamento será aprovado e inserido oficialmente no histórico de vendas e no faturamento do caixa.
+                  </p>
                 </div>
               </div>
 
-              <div className="p-3.5 bg-slate-950 border border-slate-850 rounded-xl space-y-1.5 text-xs">
-                <div>
-                  <span className="text-slate-500 font-mono text-[10px] block uppercase">COMPRADOR:</span>
-                  <span className="text-slate-200 font-bold text-sm">{budgetToExecute.clientName.toUpperCase()}</span>
-                </div>
-                <div className="flex justify-between items-center pt-1.5 border-t border-slate-900">
+              {/* Customer & Items Details */}
+              <div className="p-3.5 bg-slate-950 border border-slate-850 rounded-xl space-y-2 text-xs">
+                <div className="flex justify-between items-center">
                   <div>
-                    <span className="text-slate-500 font-mono text-[10px] block uppercase">TOTAL DA VENDA:</span>
-                    <span className="text-emerald-400 font-mono font-bold text-sm">{formatBRL(budgetToExecute.totalValue)}</span>
+                    <span className="text-slate-500 font-mono text-[10px] block uppercase font-bold">CLIENTE:</span>
+                    <span className="text-slate-200 font-bold text-sm">{budgetToExecute.clientName.toUpperCase()}</span>
+                  </div>
+                  {budgetToExecute.clientPhone && (
+                    <div className="text-right">
+                      <span className="text-slate-500 font-mono text-[10px] block uppercase font-bold">CONTATO:</span>
+                      <span className="text-slate-300 font-mono text-xs">{budgetToExecute.clientPhone}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Items preview list */}
+                {budgetToExecute.items && budgetToExecute.items.length > 0 && (
+                  <div className="pt-2 border-t border-slate-900">
+                    <span className="text-slate-500 font-mono text-[10px] block uppercase font-bold mb-1">
+                      ITENS DO ORÇAMENTO ({budgetToExecute.items.length}):
+                    </span>
+                    <div className="max-h-28 overflow-y-auto space-y-1 pr-1">
+                      {budgetToExecute.items.map((item, idx) => (
+                        <div key={idx} className="flex justify-between items-center text-[11px] bg-slate-900/60 px-2 py-1 rounded border border-slate-850/50">
+                          <span className="text-slate-300 font-medium truncate max-w-[240px]">
+                            {item.quantity}x {item.description}
+                          </span>
+                          <span className="text-slate-200 font-mono font-bold">
+                            {formatBRL(item.totalValue)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Financial overview */}
+                <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-900 font-mono text-xs">
+                  <div>
+                    <span className="text-slate-500 text-[10px] block font-bold">VALOR TOTAL:</span>
+                    <span className="text-brand-cyan font-bold text-sm">{formatBRL(budgetToExecute.totalValue)}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 text-[10px] block font-bold">SINAL PAGO:</span>
+                    <span className="text-emerald-400 font-bold">{formatBRL(budgetToExecute.downPayment || 0)}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 text-[10px] block font-bold">A RECEBER:</span>
+                    <span className="text-amber-400 font-bold">{formatBRL(Math.max(0, budgetToExecute.totalValue - (budgetToExecute.downPayment || 0)))}</span>
+                  </div>
+                </div>
+
+                {/* Date selection option */}
+                <div className="pt-2 border-t border-slate-900">
+                  <label className="text-slate-400 text-[11px] font-bold block mb-1.5">
+                    Data da Venda Oficial:
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setExecuteSaleDateOption("today")}
+                      className={`p-2 rounded-lg border text-left text-xs transition-all cursor-pointer ${
+                        executeSaleDateOption === "today"
+                          ? "bg-emerald-950/40 border-emerald-500/50 text-white font-bold"
+                          : "bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200"
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <div className={`h-2.5 w-2.5 rounded-full ${executeSaleDateOption === "today" ? "bg-emerald-400" : "bg-slate-700"}`} />
+                        <span>Data de Hoje ({formatDate(new Date().toISOString())})</span>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setExecuteSaleDateOption("original")}
+                      className={`p-2 rounded-lg border text-left text-xs transition-all cursor-pointer ${
+                        executeSaleDateOption === "original"
+                          ? "bg-emerald-950/40 border-emerald-500/50 text-white font-bold"
+                          : "bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200"
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <div className={`h-2.5 w-2.5 rounded-full ${executeSaleDateOption === "original" ? "bg-emerald-400" : "bg-slate-700"}`} />
+                        <span>Data do Orçamento ({formatDate(budgetToExecute.date)})</span>
+                      </div>
+                    </button>
                   </div>
                 </div>
               </div>
@@ -1860,14 +2075,18 @@ export function SalesHistory({
                   type="button"
                   onClick={() => {
                     if (onExecuteBudget) {
-                      onExecuteBudget(budgetToExecute);
+                      const updatedBudgetToSave: Sale = {
+                        ...budgetToExecute,
+                        date: executeSaleDateOption === "today" ? new Date().toISOString() : budgetToExecute.date
+                      };
+                      onExecuteBudget(updatedBudgetToSave);
                     }
                     setBudgetToExecute(null);
                   }}
-                  className="flex-grow py-2.5 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 text-white font-bold rounded-xl text-xs transition-all shadow-lg shadow-emerald-500/10 cursor-pointer flex items-center justify-center gap-1.5"
+                  className="flex-grow py-2.5 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 text-white font-bold rounded-xl text-xs transition-all shadow-lg shadow-emerald-500/20 cursor-pointer flex items-center justify-center gap-1.5"
                 >
                   <Check className="h-4 w-4" />
-                  <span>Aprovar e Executar</span>
+                  <span>Confirmar e Faturar Venda</span>
                 </button>
               </div>
             </motion.div>

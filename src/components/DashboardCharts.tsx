@@ -55,8 +55,8 @@ interface DashboardChartsProps {
   goalType: "daily" | "overall";
   setGoalType: (type: "daily" | "overall") => void;
   onPlayBeep: () => void;
-  filterPeriod: "all" | "today" | "week" | "custom";
-  setFilterPeriod: (period: "all" | "today" | "week" | "custom") => void;
+  filterPeriod: "all" | "today" | "week" | "month" | "custom";
+  setFilterPeriod: (period: "all" | "today" | "week" | "month" | "custom") => void;
   customDate: string;
   setCustomDate: (date: string) => void;
   customStartDate?: string;
