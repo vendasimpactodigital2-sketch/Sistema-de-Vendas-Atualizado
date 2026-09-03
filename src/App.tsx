@@ -2553,12 +2553,20 @@ export default function App() {
   // Active ringing reminders (alarms that are currently triggering and looping sound until accepted)
   const [ringingReminders, setRingingReminders] = useState<CustomReminder[]>(() => {
     try {
+      const WELCOME_TITLE = "Bem-vindo ao nosso sistema Nexvolt, o sistema que faz a diferença onde você tem o controle da sua empresa na palma da sua mão 🚀";
       const savedIdsRaw = localStorage.getItem("NUCLEO_RINGING_REMINDER_IDS");
       const savedRemindersRaw = localStorage.getItem("NUCLEO_CUSTOM_REMINDERS");
       if (savedIdsRaw && savedRemindersRaw) {
         const ids: string[] = JSON.parse(savedIdsRaw);
         const reminders: CustomReminder[] = JSON.parse(savedRemindersRaw);
-        return reminders.filter((rem) => ids.includes(rem.id));
+        return reminders
+          .filter((rem) => ids.includes(rem.id))
+          .map((rem) => {
+            if (rem.id === "welcome-reminder" || (rem.title && rem.title.includes("Boas-vindas à Gráfica"))) {
+              return { ...rem, title: WELCOME_TITLE };
+            }
+            return rem;
+          });
       }
     } catch (e) {
       console.warn("Error parsing saved ringing reminders:", e);
@@ -2689,8 +2697,17 @@ export default function App() {
         if (savedRemindersRaw) {
           let dirty = false;
           const remindersList: CustomReminder[] = JSON.parse(savedRemindersRaw);
+          const WELCOME_TITLE = "Bem-vindo ao nosso sistema Nexvolt, o sistema que faz a diferença onde você tem o controle da sua empresa na palma da sua mão 🚀";
           
-          const updatedList = remindersList.map((rem) => {
+          const updatedList = remindersList.map((originalRem) => {
+            let rem = originalRem;
+            if (rem.id === "welcome-reminder" || (rem.title && rem.title.includes("Boas-vindas à Gráfica"))) {
+              if (rem.title !== WELCOME_TITLE) {
+                dirty = true;
+                rem = { ...rem, title: WELCOME_TITLE };
+              }
+            }
+
             // Automatically reset notified for weekly recurring reminders if it's a different day, allowing re-triggers!
             if (rem.type === "weekly" && rem.dayOfWeek !== currentDayOfWeek && rem.notified) {
               dirty = true;

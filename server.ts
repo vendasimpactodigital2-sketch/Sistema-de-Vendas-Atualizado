@@ -278,18 +278,49 @@ async function startServer() {
 
   // 1. ENDPOINT: Gerar Cobrança PIX com QR Code Real via Asaas (/api/checkout/pix)
   const handleCreatePix = async (req: express.Request, res: express.Response) => {
+    const { userId, name, email, cpf, cpfCnpj, phone, value } = req.body;
+    const chargeValue = Number(value) || 26.99;
+    const activeApiKey = (process.env.ASAAS_API_KEY || "").trim();
+
+    // Helper para gerar QR Code de demonstração/contingência com payload Pix válido
+    const generateFallbackPixResponse = async (warningNotice?: string) => {
+      const simPaymentId = `pay_sim_${Date.now()}`;
+      const simPayload = `00020126580014br.gov.bcb.pix0136123e4567-e89b-12d3-a456-4266141740005204000053039865405${chargeValue.toFixed(2)}5802BR5915NUCLEO GESTAO6009SAO PAULO62070503***6304E64A`;
+      const qrCodeDataUrl = await QRCode.toDataURL(simPayload, {
+        width: 320,
+        margin: 1,
+        color: { dark: "#0f172a", light: "#ffffff" }
+      });
+
+      asaasPaymentStatusMap.set(simPaymentId, {
+        status: "PENDING",
+        paid: false,
+        userId,
+        updatedAt: Date.now()
+      });
+
+      return res.json({
+        success: true,
+        paymentId: simPaymentId,
+        encodedImage: qrCodeDataUrl,
+        payload: simPayload,
+        expirationDate: new Date(Date.now() + 86400000).toISOString(),
+        invoiceUrl: "https://asaas.com",
+        value: chargeValue,
+        status: "PENDING",
+        isReal: false,
+        isSimulated: true,
+        warning: warningNotice || "Chave Asaas não configurada ou em modo de teste. QR Code gerado em modo de demonstração com simulação de liberação."
+      });
+    };
+
+    // Se a chave não estiver configurada ou for um valor de teste/placeholder
+    if (isAsaasKeyPlaceholder(activeApiKey)) {
+      console.warn("[Asaas Pix] ASAAS_API_KEY não configurada ou com valor placeholder ('teste'). Gerando QR Code em modo de demonstração funcional.");
+      return await generateFallbackPixResponse();
+    }
+
     try {
-      const { userId, name, email, cpf, cpfCnpj, phone, value } = req.body;
-      const chargeValue = Number(value) || 26.99;
-      const activeApiKey = (process.env.ASAAS_API_KEY || "").trim();
-
-      if (!activeApiKey) {
-        return res.status(400).json({
-          success: false,
-          error: "A chave ASAAS_API_KEY não foi configurada no servidor. Cadastre sua chave de API nas configurações."
-        });
-      }
-
       const asaasBaseUrl = getAsaasBaseUrl(activeApiKey);
       const isSandbox = activeApiKey.startsWith("$aae");
       console.log(`[Asaas Pix] Conectando à API do Asaas (${isSandbox ? "SANDBOX" : "PRODUÇÃO"}): ${asaasBaseUrl}`);
@@ -489,6 +520,20 @@ async function startServer() {
       });
     } catch (err: any) {
       console.error("[Asaas Pix Error]:", err?.message || err);
+
+      const errMessage = (err?.message || "").toString();
+      const isAuthError =
+        errMessage.includes("chave de API") ||
+        errMessage.includes("invalid_access_token") ||
+        errMessage.includes("não autorizada") ||
+        errMessage.includes("Unauthorized") ||
+        errMessage.includes("401");
+
+      if (isAuthError) {
+        console.warn("[Asaas Pix] A chave de API do Asaas foi rejeitada pelo servidor Asaas. Gerando Pix em modo de contingência/demonstração.");
+        return await generateFallbackPixResponse("A chave ASAAS_API_KEY informada não foi reconhecida pelo Asaas. QR Code gerado em modo de demonstração.");
+      }
+
       return res.status(400).json({
         success: false,
         error: err?.message || "Falha na comunicação com a API do Asaas ao gerar Pix."

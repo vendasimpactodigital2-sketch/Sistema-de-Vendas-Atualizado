@@ -48,15 +48,28 @@ export function RemindersCalendarModal({ isOpen, onClose }: RemindersCalendarMod
   // Load and subscribe from localStorage
   const loadRemindersFromLocal = () => {
     try {
+      const WELCOME_TITLE = "Bem-vindo ao nosso sistema Nexvolt, o sistema que faz a diferença onde você tem o controle da sua empresa na palma da sua mão 🚀";
       const saved = localStorage.getItem("NUCLEO_CUSTOM_REMINDERS");
       if (saved) {
-        setReminders(JSON.parse(saved));
+        const parsed = JSON.parse(saved);
+        let changed = false;
+        const updated = parsed.map((item: any) => {
+          if (item.id === "welcome-reminder" || (item.title && item.title.includes("Boas-vindas à Gráfica"))) {
+            changed = true;
+            return { ...item, title: WELCOME_TITLE };
+          }
+          return item;
+        });
+        if (changed) {
+          localStorage.setItem("NUCLEO_CUSTOM_REMINDERS", JSON.stringify(updated));
+        }
+        setReminders(updated);
       } else {
         const todayStr = new Date().toISOString().split("T")[0];
         const defaultRem = [
           {
             id: "welcome-reminder",
-            title: "Boas-vindas à Gráfica! Conheça nosso painel 🚀",
+            title: WELCOME_TITLE,
             type: "date",
             date: todayStr,
             time: "09:00",

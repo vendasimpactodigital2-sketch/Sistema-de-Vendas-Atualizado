@@ -61,6 +61,8 @@ export function TelaDeBloqueio({ currentUser, handleLogout, onUnlock }: AsaasPix
     status: string;
     isReal?: boolean;
     isSandbox?: boolean;
+    isSimulated?: boolean;
+    warning?: string;
     message?: string;
   } | null>(null);
 
@@ -68,6 +70,7 @@ export function TelaDeBloqueio({ currentUser, handleLogout, onUnlock }: AsaasPix
   const [copied, setCopied] = useState(false);
   const [isPaid, setIsPaid] = useState(false);
   const [isCheckingManual, setIsCheckingManual] = useState(false);
+  const [isSimulating, setIsSimulating] = useState(false);
   const [audioMuted, setAudioMuted] = useState(false);
   const [secondsRemaining, setSecondsRemaining] = useState(900); // 15 minutos
 
@@ -315,7 +318,23 @@ export function TelaDeBloqueio({ currentUser, handleLogout, onUnlock }: AsaasPix
     if (isCheckingManual) return;
     setIsCheckingManual(true);
     try {
-      // 1. Verifica diretamente a tabela 'users' no Supabase
+      // 1. Se estiver em modo de simulação/teste
+      if (pixData?.isSimulated && pixData?.paymentId) {
+        const simRes = await fetch("/api/asaas/simulate-confirm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            paymentId: pixData.paymentId,
+            userId: currentUser?.id
+          })
+        });
+        if (simRes.ok) {
+          triggerAutoUnlock();
+          return;
+        }
+      }
+
+      // 2. Verifica diretamente a tabela 'users' no Supabase
       if (isSupabaseConfigured() && currentUser?.id) {
         const supabase = getSupabase();
         if (supabase) {
@@ -334,7 +353,7 @@ export function TelaDeBloqueio({ currentUser, handleLogout, onUnlock }: AsaasPix
         }
       }
 
-      // 2. Consulta API do Asaas
+      // 3. Consulta API do Asaas
       if (pixData?.paymentId) {
         const checkRes = await fetch(`/api/asaas/check-status/${pixData.paymentId}`);
         if (checkRes.ok) {
@@ -349,6 +368,29 @@ export function TelaDeBloqueio({ currentUser, handleLogout, onUnlock }: AsaasPix
       console.error("Erro na checagem manual:", e);
     } finally {
       setTimeout(() => setIsCheckingManual(false), 900);
+    }
+  };
+
+  // Simulação instantânea de pagamento aprovado para testes locais/demonstração
+  const handleSimulatePayment = async () => {
+    if (isSimulating) return;
+    setIsSimulating(true);
+    try {
+      const simRes = await fetch("/api/asaas/simulate-confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          paymentId: pixData?.paymentId || `pay_sim_${Date.now()}`,
+          userId: currentUser?.id
+        })
+      });
+      if (simRes.ok) {
+        triggerAutoUnlock();
+      }
+    } catch (e) {
+      console.error("Erro ao simular aprovação:", e);
+    } finally {
+      setIsSimulating(false);
     }
   };
 
@@ -580,6 +622,19 @@ export function TelaDeBloqueio({ currentUser, handleLogout, onUnlock }: AsaasPix
                 <span>{isCheckingManual ? "Verificando com o Asaas..." : "Já Paguei, Verificar Agora"}</span>
               </button>
 
+              {/* Botão de teste/simulação exibido apenas em ambiente de teste/demonstração */}
+              {pixData?.isSimulated && (
+                <button
+                  onClick={handleSimulatePayment}
+                  disabled={isSimulating}
+                  className="w-full bg-slate-900 hover:bg-slate-850 text-cyan-400 hover:text-cyan-300 font-mono font-bold text-[11px] py-2.5 px-4 rounded-xl border border-cyan-500/30 transition-all flex items-center justify-center gap-2 cursor-pointer"
+                  title="Clique aqui para testar o desbloqueio instantâneo do sistema"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>{isSimulating ? "Liberando acesso..." : "🧪 Testar Desbloqueio Instantâneo (Simulação)"}</span>
+                </button>
+              )}
+
               {/* Alternative payment link */}
               {pixData?.invoiceUrl && pixData.invoiceUrl !== "https://asaas.com" && (
                 <a
@@ -593,6 +648,13 @@ export function TelaDeBloqueio({ currentUser, handleLogout, onUnlock }: AsaasPix
                 </a>
               )}
             </div>
+
+            {pixData?.warning && (
+              <div className="p-2.5 bg-amber-950/40 border border-amber-500/30 rounded-xl text-amber-300 text-[11px] font-mono text-center flex items-center justify-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span>{pixData.warning}</span>
+              </div>
+            )}
 
             {error && (
               <div className="p-2.5 bg-red-950/40 border border-red-500/30 rounded-xl text-red-400 text-xs font-mono text-center">

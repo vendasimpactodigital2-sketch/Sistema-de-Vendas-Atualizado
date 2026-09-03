@@ -145,6 +145,8 @@ export function Header({
   );
 
   // Reminders state & sync
+  const WELCOME_REMINDER_TITLE = "Bem-vindo ao nosso sistema Nexvolt, o sistema que faz a diferença onde você tem o controle da sua empresa na palma da sua mão 🚀";
+
   const [reminders, setReminders] = React.useState<any[]>(() => {
     const saved = localStorage.getItem("NUCLEO_CUSTOM_REMINDERS");
     if (!saved) {
@@ -152,7 +154,7 @@ export function Header({
       const defaultRem = [
         {
           id: "welcome-reminder",
-          title: "Boas-vindas à Gráfica! Conheça nosso painel 🚀",
+          title: WELCOME_REMINDER_TITLE,
           type: "date",
           date: todayStr,
           time: "09:00",
@@ -164,7 +166,23 @@ export function Header({
       localStorage.setItem("NUCLEO_CUSTOM_REMINDERS", JSON.stringify(defaultRem));
       return defaultRem;
     }
-    return JSON.parse(saved);
+    try {
+      const parsed = JSON.parse(saved);
+      let changed = false;
+      const updated = parsed.map((item: any) => {
+        if (item.id === "welcome-reminder" || (item.title && item.title.includes("Boas-vindas à Gráfica"))) {
+          changed = true;
+          return { ...item, title: WELCOME_REMINDER_TITLE };
+        }
+        return item;
+      });
+      if (changed) {
+        localStorage.setItem("NUCLEO_CUSTOM_REMINDERS", JSON.stringify(updated));
+      }
+      return updated;
+    } catch {
+      return [];
+    }
   });
   const [isPanelOpen, setIsPanelOpen] = React.useState(false);
   const [isCalendarOpen, setIsCalendarOpen] = React.useState(false);
@@ -175,12 +193,18 @@ export function Header({
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
-          setReminders((prev) => {
-            if (JSON.stringify(prev) !== saved) {
-              return parsed;
+          let changed = false;
+          const updated = parsed.map((item: any) => {
+            if (item.id === "welcome-reminder" || (item.title && item.title.includes("Boas-vindas à Gráfica"))) {
+              changed = true;
+              return { ...item, title: WELCOME_REMINDER_TITLE };
             }
-            return prev;
+            return item;
           });
+          if (changed) {
+            localStorage.setItem("NUCLEO_CUSTOM_REMINDERS", JSON.stringify(updated));
+          }
+          setReminders(updated);
         } catch (e) {
           console.error("Error reading reminders in Header:", e);
         }
