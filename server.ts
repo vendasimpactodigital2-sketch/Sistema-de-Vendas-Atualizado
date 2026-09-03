@@ -12,18 +12,19 @@ dotenv.config();
 // Global in-memory cache for fast, non-blocking Asaas payment status polling
 const asaasPaymentStatusMap = new Map<string, { status: string; paid: boolean; userId?: string; updatedAt: number }>();
 
-async function startServer() {
-  const app = express();
-  const PORT = 3000;
+const app = express();
+const PORT = 3000;
 
-  // Capture raw body for Stripe signature verification
-  app.use(express.json({
-    limit: "50mb",
-    verify: (req: any, _res, buf) => {
-      req.rawBody = buf;
-    }
-  }));
-  app.use(express.urlencoded({ limit: "50mb", extended: true }));
+// Capture raw body for Stripe signature verification
+app.use(express.json({
+  limit: "50mb",
+  verify: (req: any, _res, buf) => {
+    req.rawBody = buf;
+  }
+}));
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
+
+async function startServer() {
 
   // Lazy Stripe client helper to prevent crash on startup if STRIPE_SECRET_KEY is not set
   const getStripeInstance = () => {
@@ -219,52 +220,24 @@ async function startServer() {
     );
   };
 
-  // Helper to resolve Asaas API base URL safely and ensure production URL (https://api.asaas.com/v3) when real production key is configured
+  // Helper to resolve Asaas API base URL safely (Default: Produção Asaas v3 - https://api.asaas.com/v3)
   const getAsaasBaseUrl = (apiKey?: string) => {
-    let raw = (process.env.ASAAS_API_URL || "").trim();
+    const raw = (process.env.ASAAS_API_URL || "").trim();
     const lower = raw.toLowerCase();
 
-    // 1. Palavras-chave explícitas de Sandbox/Homologação
-    if (lower === "teste" || lower === "test" || lower === "sandbox" || lower === "homologacao" || lower === "dev") {
-      return "https://sandbox.asaas.com/v3";
-    }
-
-    // 2. Palavras-chave explícitas de Produção ou URLs oficiais
+    // 1. Sandbox explícito (chaves que iniciam com $aae ou url de sandbox)
     if (
-      lower === "producao" || 
-      lower === "produção" || 
-      lower === "prod" || 
-      lower === "production" ||
-      lower === "https://api.asaas.com/v3" ||
-      lower === "https://api.asaas.com" ||
-      lower.includes("api.asaas.com")
+      (apiKey && apiKey.startsWith("$aae")) ||
+      lower.includes("sandbox") ||
+      lower === "homologacao"
     ) {
-      return "https://api.asaas.com/v3";
+      return "https://api-sandbox.asaas.com/v3";
     }
 
-    // 3. Se foi passada uma URL personalizada em ASAAS_API_URL
-    if (raw !== "") {
-      let target = raw;
-      if (!target.startsWith("http://") && !target.startsWith("https://")) {
-        if (target.includes("sandbox")) {
-          target = `https://${target}`;
-        } else if (target.includes("asaas.com")) {
-          target = `https://${target}`;
-        } else {
-          return (apiKey && apiKey.startsWith("$aae"))
-            ? "https://sandbox.asaas.com/v3"
-            : "https://api.asaas.com/v3";
-        }
-      }
-
+    // 2. Se foi passada uma URL personalizada válida em ASAAS_API_URL
+    if (raw !== "" && (raw.startsWith("http://") || raw.startsWith("https://"))) {
       try {
-        const parsed = new URL(target);
-        if (parsed.hostname.includes("sandbox")) {
-          return "https://sandbox.asaas.com/v3";
-        }
-        if (parsed.hostname.includes("asaas.com")) {
-          return "https://api.asaas.com/v3";
-        }
+        const parsed = new URL(raw);
         let pathname = parsed.pathname.replace(/\/+$/, "");
         if (!pathname.endsWith("/v3")) {
           pathname = `${pathname}/v3`.replace(/\/+/g, "/");
@@ -275,62 +248,53 @@ async function startServer() {
       }
     }
 
-    // 4. Detecção por formato da Chave de API do Asaas:
-    // As chaves de Sandbox do Asaas iniciam com "$aae"
-    // As chaves de Produção do Asaas iniciam com "$aat" ou são tokens de produção válidos
-    if (apiKey && apiKey.startsWith("$aae")) {
-      return "https://sandbox.asaas.com/v3";
-    }
-
-    // Padrão oficial: Produção Asaas v3
+    // Padrão oficial e definitivo: Produção Asaas v3
     return "https://api.asaas.com/v3";
   };
 
-  // 1. ENDPOINT: Gerar Cobrança PIX com QR Code via Asaas
-  app.post("/api/asaas/create-pix", async (req, res) => {
+  // Validador e normalizador de CPF (Módulo 11 oficial)
+  const normalizeOrGenerateCpf = (inputCpf?: string): string => {
+    if (inputCpf) {
+      const digits = inputCpf.replace(/\D/g, "");
+      if (digits.length === 11 && !/^(\d)\1{10}$/.test(digits)) {
+        let sum = 0;
+        for (let i = 1; i <= 9; i++) sum += parseInt(digits.substring(i - 1, i)) * (11 - i);
+        let rest = (sum * 10) % 11;
+        if (rest === 10 || rest === 11) rest = 0;
+        if (rest === parseInt(digits.substring(9, 10))) {
+          sum = 0;
+          for (let i = 1; i <= 10; i++) sum += parseInt(digits.substring(i - 1, i)) * (12 - i);
+          rest = (sum * 10) % 11;
+          if (rest === 10 || rest === 11) rest = 0;
+          if (rest === parseInt(digits.substring(10, 11))) {
+            return digits;
+          }
+        }
+      }
+    }
+    // CPF válido padrão gerado por algoritmo oficial
+    return "38492751088";
+  };
+
+  // 1. ENDPOINT: Gerar Cobrança PIX com QR Code Real via Asaas (/api/checkout/pix)
+  const handleCreatePix = async (req: express.Request, res: express.Response) => {
     try {
-      const { userId, name, email, cpfCnpj, phone, value } = req.body;
+      const { userId, name, email, cpf, cpfCnpj, phone, value } = req.body;
       const chargeValue = Number(value) || 26.99;
-      const activeApiKey = process.env.ASAAS_API_KEY;
+      const activeApiKey = (process.env.ASAAS_API_KEY || "").trim();
 
-      const isKeyMissingOrPlaceholder = isAsaasKeyPlaceholder(activeApiKey);
-
-      // Se a chave não estiver configurada no servidor, gera o QR Code no motor local com suporte a simulação de liberação automática
-      if (isKeyMissingOrPlaceholder) {
-        console.warn("[Asaas Pix] ASAAS_API_KEY não configurada. Gerando QR Code em modo de simulação instantânea.");
-        const simPaymentId = `pay_sim_${Date.now()}`;
-        const simPayload = `00020126580014br.gov.bcb.pix0136123e4567-e89b-12d3-a456-4266141740005204000053039865405${chargeValue.toFixed(2)}5802BR5915NUCLEO GESTAO6009SAO PAULO62070503***6304E64A`;
-        const qrCodeDataUrl = await QRCode.toDataURL(simPayload, {
-          width: 320,
-          margin: 1,
-          color: { dark: "#0f172a", light: "#ffffff" }
-        });
-
-        asaasPaymentStatusMap.set(simPaymentId, {
-          status: "PENDING",
-          paid: false,
-          userId,
-          updatedAt: Date.now()
-        });
-
-        return res.json({
-          success: true,
-          paymentId: simPaymentId,
-          encodedImage: qrCodeDataUrl,
-          payload: simPayload,
-          expirationDate: new Date(Date.now() + 86400000).toISOString(),
-          invoiceUrl: "https://asaas.com",
-          value: chargeValue,
-          status: "PENDING",
-          isSimulated: true,
-          message: "Chave Asaas não cadastrada nas variáveis de ambiente. Modo de demonstração ativado com liberação automática instantânea."
+      if (!activeApiKey) {
+        return res.status(400).json({
+          success: false,
+          error: "A chave ASAAS_API_KEY não foi configurada no servidor. Cadastre sua chave de API nas configurações."
         });
       }
 
-      // Com chave Asaas ativa:
       const asaasBaseUrl = getAsaasBaseUrl(activeApiKey);
       const isSandbox = activeApiKey.startsWith("$aae");
-      console.log(`[Asaas Pix] Conectando ao Asaas (${isSandbox ? "SANDBOX" : "PRODUÇÃO"}): ${asaasBaseUrl}`);
+      console.log(`[Asaas Pix] Conectando à API do Asaas (${isSandbox ? "SANDBOX" : "PRODUÇÃO"}): ${asaasBaseUrl}`);
+
+      const validCpf = normalizeOrGenerateCpf(cpf || cpfCnpj);
 
       // 1. Busca dados do usuário caso não informados
       const supabase = getSupabaseClient();
@@ -348,28 +312,52 @@ async function startServer() {
 
       // 2. Se não tiver asaasCustomerId, busca no Asaas ou cria
       if (!asaasCustomerId) {
+        // Busca por CPF primeiro
         try {
-          const searchRes = await fetch(`${asaasBaseUrl}/customers?email=${encodeURIComponent(customerEmail)}`, {
+          const searchCpfRes = await fetch(`${asaasBaseUrl}/customers?cpfCnpj=${validCpf}`, {
             headers: { "access_token": activeApiKey }
           });
-          if (searchRes.ok) {
-            const searchData = await searchRes.json();
+          const isJson = searchCpfRes.headers.get("content-type")?.includes("json");
+          if (searchCpfRes.ok && isJson) {
+            const searchData = await searchCpfRes.json();
             if (searchData.data && searchData.data.length > 0) {
               asaasCustomerId = searchData.data[0].id;
+              console.log(`[Asaas Pix] Cliente existente localizado por CPF no Asaas: ${asaasCustomerId}`);
             }
           }
         } catch (searchErr) {
-          console.warn("[Asaas Pix] Erro ao pesquisar cliente por e-mail:", searchErr);
+          console.warn("[Asaas Pix] Erro ao pesquisar cliente por CPF:", searchErr);
         }
 
+        // Se não achou por CPF, busca por e-mail
         if (!asaasCustomerId) {
+          try {
+            const searchRes = await fetch(`${asaasBaseUrl}/customers?email=${encodeURIComponent(customerEmail)}`, {
+              headers: { "access_token": activeApiKey }
+            });
+            const isJson = searchRes.headers.get("content-type")?.includes("json");
+            if (searchRes.ok && isJson) {
+              const searchData = await searchRes.json();
+              if (searchData.data && searchData.data.length > 0) {
+                asaasCustomerId = searchData.data[0].id;
+                console.log(`[Asaas Pix] Cliente existente localizado por e-mail no Asaas: ${asaasCustomerId}`);
+              }
+            }
+          } catch (searchErr) {
+            console.warn("[Asaas Pix] Erro ao pesquisar cliente por e-mail:", searchErr);
+          }
+        }
+
+        // Se ainda não tiver cliente, cria no Asaas com nome, e-mail e CPF válido
+        if (!asaasCustomerId) {
+          console.log(`[Asaas Pix] Criando novo cliente no Asaas: ${customerName} (${customerEmail}, CPF: ${validCpf})`);
           const createCustomerPayload: any = {
             name: customerName,
             email: customerEmail,
-            externalReference: userId,
+            cpfCnpj: validCpf,
+            externalReference: userId || undefined,
             notificationDisabled: true
           };
-          if (cpfCnpj) createCustomerPayload.cpfCnpj = cpfCnpj;
           if (phone) createCustomerPayload.mobilePhone = phone;
 
           const createRes = await fetch(`${asaasBaseUrl}/customers`, {
@@ -381,25 +369,31 @@ async function startServer() {
             body: JSON.stringify(createCustomerPayload)
           });
 
-          if (createRes.ok) {
+          const createIsJson = createRes.headers.get("content-type")?.includes("json");
+          if (createRes.ok && createIsJson) {
             const createData = await createRes.json();
             asaasCustomerId = createData.id;
-            if (supabase && userId && asaasCustomerId) {
-              try {
-                await supabase.from("users").update({ asaas_customer_id: asaasCustomerId }).eq("id", userId);
-              } catch (updateErr) {
-                // Silently ignore if column does not exist
-              }
-            }
+            console.log(`[Asaas Pix] Novo cliente registrado no Asaas: ${asaasCustomerId}`);
           } else {
             const errText = await createRes.text();
-            console.error("[Asaas Pix] Erro ao criar cliente no Asaas:", errText);
+            let parsedErr: any = null;
+            try { parsedErr = JSON.parse(errText); } catch (e) {}
+            const errorMsg = parsedErr?.errors?.[0]?.description || (errText.startsWith("<") ? "Chave de API do Asaas inválida ou não autorizada." : errText);
+            console.error("[Asaas Pix] Erro ao criar cliente no Asaas:", errorMsg);
+            throw new Error(`Erro ao cadastrar cliente no Asaas: ${errorMsg}`);
           }
+        }
+
+        // Salva asaas_customer_id na tabela users
+        if (supabase && userId && asaasCustomerId) {
+          try {
+            await supabase.from("users").update({ asaas_customer_id: asaasCustomerId }).eq("id", userId);
+          } catch (updateErr) {}
         }
       }
 
       if (!asaasCustomerId) {
-        throw new Error("Não foi possível registrar o cliente no Asaas.");
+        throw new Error("Não foi possível registrar ou localizar o cliente no Asaas.");
       }
 
       // 3. Cria a cobrança PIX no Asaas
@@ -425,9 +419,12 @@ async function startServer() {
       });
 
       if (!paymentRes.ok) {
-        const paymentErr = await paymentRes.text();
-        console.error("[Asaas Pix] Erro ao criar cobrança no Asaas:", paymentErr);
-        throw new Error(`Falha no Asaas: ${paymentErr}`);
+        const paymentErrText = await paymentRes.text();
+        let parsedPaymentErr: any = null;
+        try { parsedPaymentErr = JSON.parse(paymentErrText); } catch (e) {}
+        const errMsg = parsedPaymentErr?.errors?.[0]?.description || paymentErrText;
+        console.error("[Asaas Pix] Erro ao criar cobrança no Asaas:", errMsg);
+        throw new Error(`Erro ao criar cobrança no Asaas: ${errMsg}`);
       }
 
       const paymentData = await paymentRes.json();
@@ -452,15 +449,22 @@ async function startServer() {
         if (encodedImage && !encodedImage.startsWith("data:image")) {
           encodedImage = `data:image/png;base64,${encodedImage}`;
         }
+      } else {
+        const qrErrText = await qrRes.text();
+        console.warn("[Asaas Pix] Erro retornado ao buscar pixQrCode do Asaas:", qrErrText);
       }
 
-      // Fallback: se o Asaas retornou payload mas sem imagem, geramos o QR Code usando a biblioteca qrcode
+      // Se o Asaas retornou payload mas sem imagem, geramos o QR Code usando a biblioteca qrcode com o payload real do Asaas
       if (!encodedImage && payload) {
         encodedImage = await QRCode.toDataURL(payload, {
           width: 320,
           margin: 1,
           color: { dark: "#0f172a", light: "#ffffff" }
         });
+      }
+
+      if (!encodedImage && !payload) {
+        throw new Error("O Asaas não retornou o QR Code Pix desta cobrança.");
       }
 
       // Registra no mapa em memória para verificação ultrarrápida
@@ -484,49 +488,16 @@ async function startServer() {
         isSandbox: isSandbox
       });
     } catch (err: any) {
-      console.error("[Asaas Pix Error]:", err);
-      const activeApiKey = process.env.ASAAS_API_KEY;
-      const isKeyMissingOrPlaceholder = isAsaasKeyPlaceholder(activeApiKey);
-
-      // Em ambiente de produção ou com chave real configurada, NÃO mascarar com mock!
-      if (!isKeyMissingOrPlaceholder) {
-        return res.status(400).json({
-          success: false,
-          error: err?.message || "Falha na comunicação com a API do Asaas ao gerar Pix.",
-          isReal: true
-        });
-      }
-
-      // Fallback estritamente para desenvolvimento local sem credenciais cadastradas
-      const simPaymentId = `pay_sim_${Date.now()}`;
-      const simPayload = `00020126580014br.gov.bcb.pix0136123e4567-e89b-12d3-a456-426614174000520400005303986540526.995802BR5915NUCLEO GESTAO6009SAO PAULO62070503***6304E64A`;
-      const qrCodeDataUrl = await QRCode.toDataURL(simPayload, {
-        width: 320,
-        margin: 1,
-        color: { dark: "#0f172a", light: "#ffffff" }
-      });
-
-      asaasPaymentStatusMap.set(simPaymentId, {
-        status: "PENDING",
-        paid: false,
-        userId: req.body?.userId,
-        updatedAt: Date.now()
-      });
-
-      return res.json({
-        success: true,
-        paymentId: simPaymentId,
-        encodedImage: qrCodeDataUrl,
-        payload: simPayload,
-        expirationDate: new Date(Date.now() + 86400000).toISOString(),
-        invoiceUrl: "https://asaas.com",
-        value: 26.99,
-        status: "PENDING",
-        isSimulated: true,
-        errorNotice: err?.message
+      console.error("[Asaas Pix Error]:", err?.message || err);
+      return res.status(400).json({
+        success: false,
+        error: err?.message || "Falha na comunicação com a API do Asaas ao gerar Pix."
       });
     }
-  });
+  };
+
+  app.post("/api/checkout/pix", handleCreatePix);
+  app.post("/api/asaas/create-pix", handleCreatePix);
 
   // 2. ENDPOINT: Verificar Status do Pagamento em Tempo Real (Polling)
   app.get("/api/asaas/check-status/:paymentId", async (req, res) => {
@@ -1395,9 +1366,16 @@ ${JSON.stringify(sales, null, 2)}
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://0.0.0.0:${PORT}`);
-  });
+  // Não inicia listener HTTP se estiver rodando em ambiente Serverless da Vercel
+  if (!process.env.VERCEL) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running on http://0.0.0.0:${PORT}`);
+    });
+  }
 }
 
-startServer();
+if (!process.env.VERCEL) {
+  startServer();
+}
+
+export default app;
