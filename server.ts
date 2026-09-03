@@ -4,9 +4,13 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createClient } from "@supabase/supabase-js";
 import Stripe from "stripe";
+import QRCode from "qrcode";
 import dotenv from "dotenv";
 
 dotenv.config();
+
+// Global in-memory cache for fast, non-blocking Asaas payment status polling
+const asaasPaymentStatusMap = new Map<string, { status: string; paid: boolean; userId?: string; updatedAt: number }>();
 
 async function startServer() {
   const app = express();
@@ -124,292 +128,559 @@ async function startServer() {
     }
   });
 
-  // API route to create a payment on Asaas
-  app.post("/api/payments/create", async (req, res) => {
-    const activeApiKey = process.env.ASAAS_API_KEY;
-    console.log("Chave API lida pelo servidor:", activeApiKey ? "Encontrada (Começa com: " + activeApiKey.substring(0, 8) + "...)" : "Não encontrada (Nula ou Vazia)");
-    
-    // Verificação de segurança imediata: se ASAAS_API_KEY não existir ou estiver vazia/placeholder, retorna o mock de sucesso imediatamente
-    const isApiKeyInvalid = !activeApiKey || activeApiKey.trim() === "" || activeApiKey.toLowerCase().includes("your_") || activeApiKey.toLowerCase().includes("placeholder");
-    if (isApiKeyInvalid) {
-      console.warn("[Asaas Create] ASAAS_API_KEY não configurada ou inválida. Retornando link simulado imediatamente.");
-      const fallbackUrl = "https://asaas.com";
-      const responseBody = {
-        checkoutUrl: fallbackUrl,
-        invoiceUrl: fallbackUrl,
-        url: fallbackUrl,
-        isSimulated: true,
-        message: "Modo Simulação Ativado por falta de chave API do Asaas."
-      };
-      console.log("[Asaas Create Response]:", JSON.stringify(responseBody, null, 2));
-      return res.json(responseBody);
+  // Helper to get Supabase client safely without crashing
+  const getSupabaseClient = () => {
+    const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+    if (!supabaseUrl || !supabaseKey || supabaseUrl.includes("your_") || supabaseKey.includes("your_")) {
+      return null;
+    }
+    try {
+      return createClient(supabaseUrl, supabaseKey);
+    } catch {
+      return null;
+    }
+  };
+
+  // Helper to activate user subscription in database
+  const activateUserInDatabase = async (userId?: string) => {
+    if (!userId) return false;
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      console.log(`[Supabase Activation] Supabase não configurado. Usuário ${userId} liberado no escopo da aplicação.`);
+      return true;
+    }
+    try {
+      console.log(`[Supabase Activation] Atualizando status diretamente na tabela 'users' para 'ATIVO' para o usuário: ${userId}`);
+      
+      // 1. Atualiza diretamente na tabela 'users' (onde o Supabase Realtime está ativado)
+      let userUpdated = false;
+      try {
+        const { error: userErr } = await supabase
+          .from("users")
+          .update({ 
+            status: "ATIVO", 
+            status_assinatura: "ativo",
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", userId);
+
+        if (userErr) {
+          console.warn("[Supabase Activation] Tentando atualizar 'users' apenas com status='ATIVO':", userErr.message);
+          const { error: fallbackErr } = await supabase.from("users").update({ status: "ATIVO" }).eq("id", userId);
+          if (!fallbackErr) {
+            userUpdated = true;
+          } else {
+            // Tenta também com status_assinatura="ativo"
+            await supabase.from("users").update({ status_assinatura: "ativo" }).eq("id", userId);
+            userUpdated = true;
+          }
+        } else {
+          userUpdated = true;
+        }
+      } catch (userErr: any) {
+        console.warn(`[Supabase Activation] Aviso na tabela 'users':`, userErr?.message);
+      }
+
+      // 2. Sincroniza também na tabela 'profiles' para retrocompatibilidade
+      try {
+        await supabase
+          .from("profiles")
+          .update({ 
+            status: "ATIVO", 
+            status_assinatura: "ATIVO",
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", userId);
+      } catch (profileErr: any) {
+        // Silencioso caso profiles não exista
+      }
+
+      return userUpdated;
+    } catch (err: any) {
+      console.error(`[Supabase Activation] Falha ao atualizar banco:`, err?.message);
+      return false;
+    }
+  };
+
+  // Helper to check if an Asaas API key is missing or dummy/placeholder
+  const isAsaasKeyPlaceholder = (apiKey?: string) => {
+    if (!apiKey) return true;
+    const clean = apiKey.trim().toLowerCase();
+    return (
+      clean === "" ||
+      clean.includes("your_") ||
+      clean.includes("my_") ||
+      clean === "teste" ||
+      clean === "test" ||
+      clean === "sandbox" ||
+      clean === "demo" ||
+      clean.length < 10
+    );
+  };
+
+  // Helper to resolve Asaas API base URL safely and ensure production URL (https://api.asaas.com/v3) when real production key is configured
+  const getAsaasBaseUrl = (apiKey?: string) => {
+    let raw = (process.env.ASAAS_API_URL || "").trim();
+    const lower = raw.toLowerCase();
+
+    // 1. Palavras-chave explícitas de Sandbox/Homologação
+    if (lower === "teste" || lower === "test" || lower === "sandbox" || lower === "homologacao" || lower === "dev") {
+      return "https://sandbox.asaas.com/v3";
     }
 
-    try {
-      const { userId } = req.body;
-      if (!userId) {
-        return res.status(400).json({ error: "O ID do usuário (userId) é obrigatório para gerar a cobrança." });
+    // 2. Palavras-chave explícitas de Produção ou URLs oficiais
+    if (
+      lower === "producao" || 
+      lower === "produção" || 
+      lower === "prod" || 
+      lower === "production" ||
+      lower === "https://api.asaas.com/v3" ||
+      lower === "https://api.asaas.com" ||
+      lower.includes("api.asaas.com")
+    ) {
+      return "https://api.asaas.com/v3";
+    }
+
+    // 3. Se foi passada uma URL personalizada em ASAAS_API_URL
+    if (raw !== "") {
+      let target = raw;
+      if (!target.startsWith("http://") && !target.startsWith("https://")) {
+        if (target.includes("sandbox")) {
+          target = `https://${target}`;
+        } else if (target.includes("asaas.com")) {
+          target = `https://${target}`;
+        } else {
+          return (apiKey && apiKey.startsWith("$aae"))
+            ? "https://sandbox.asaas.com/v3"
+            : "https://api.asaas.com/v3";
+        }
       }
 
-      const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
-      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
-      const webhookSecret = process.env.ASAAS_WEBHOOK_SECRET;
-
-      const isWebhookSecretInvalid = !webhookSecret || webhookSecret.trim() === "" || webhookSecret.toLowerCase().includes("your_") || webhookSecret.toLowerCase().includes("placeholder");
-      const isSupabaseInvalid = !supabaseUrl || !supabaseKey || supabaseUrl.toLowerCase().includes("your_") || supabaseKey.toLowerCase().includes("your_");
-
-      // Se alguma das chaves cruciais do Supabase ou webhook estiver ausente ou for placeholder, ignora o Asaas temporariamente e responde com simulação
-      if (isWebhookSecretInvalid || isSupabaseInvalid) {
-        console.warn("[Asaas Create] CONFIGURAÇÃO INCOMPLETA/PROVISÓRIA DETECTADA. Ativando bypass de simulação para evitar quebra do frontend.");
-        const fallbackUrl = "https://asaas.com";
-        const responseBody = {
-          checkoutUrl: fallbackUrl,
-          invoiceUrl: fallbackUrl,
-          url: fallbackUrl,
-          isSimulated: true,
-          message: "Modo Simulação Ativado - Chaves de API do Webhook ou Supabase ausentes ou pendentes de configuração."
-        };
-        console.log("[Asaas Create Response]:", JSON.stringify(responseBody, null, 2));
-        return res.json(responseBody);
-      }
-
-      const supabase = createClient(supabaseUrl, supabaseKey);
-
-      // 1. Busca os dados de cadastro do usuário na tabela 'users' para obter o asaas_customer_id ou dados de criação
-      let user: any = null;
       try {
-        const { data, error: userError } = await supabase
-          .from("users")
-          .select("*")
-          .eq("id", userId)
-          .maybeSingle();
-        
-        if (userError) {
-          console.error(`[Asaas Create] Erro ao buscar usuário no Supabase:`, userError);
-        } else {
-          user = data;
+        const parsed = new URL(target);
+        if (parsed.hostname.includes("sandbox")) {
+          return "https://sandbox.asaas.com/v3";
         }
-      } catch (dbErr: any) {
-        console.error(`[Asaas Create] Exceção ao ler banco Supabase:`, dbErr.message);
-      }
-
-      const userDisplayName = user?.name || user?.nome || "Cliente de Teste";
-      const userEmail = user?.email || "financeiro@cliente-simulado.com";
-      let asaasCustomerId = user?.asaas_customer_id;
-
-      // Resolve a URL base correta da API do Asaas
-      let asaasBaseUrl = process.env.ASAAS_API_URL;
-      if (!asaasBaseUrl) {
-        if (activeApiKey.startsWith("$aae")) {
-          asaasBaseUrl = "https://sandbox.asaas.com/v3";
-          console.log("[Asaas Create] Chave sandbox detectada automaticamente ($aae). Usando sandbox.asaas.com");
-        } else {
-          asaasBaseUrl = "https://api.asaas.com/v3";
+        if (parsed.hostname.includes("asaas.com")) {
+          return "https://api.asaas.com/v3";
         }
+        let pathname = parsed.pathname.replace(/\/+$/, "");
+        if (!pathname.endsWith("/v3")) {
+          pathname = `${pathname}/v3`.replace(/\/+/g, "/");
+        }
+        return `${parsed.origin}${pathname}`;
+      } catch (urlErr) {
+        console.warn(`[Asaas] URL customizada inválida em ASAAS_API_URL ('${raw}'). Usando endpoint oficial de produção.`);
       }
-      if (asaasBaseUrl.endsWith("/")) {
-        asaasBaseUrl = asaasBaseUrl.slice(0, -1);
-      }
-      if (!asaasBaseUrl.endsWith("/v3")) {
-        asaasBaseUrl = asaasBaseUrl + "/v3";
+    }
+
+    // 4. Detecção por formato da Chave de API do Asaas:
+    // As chaves de Sandbox do Asaas iniciam com "$aae"
+    // As chaves de Produção do Asaas iniciam com "$aat" ou são tokens de produção válidos
+    if (apiKey && apiKey.startsWith("$aae")) {
+      return "https://sandbox.asaas.com/v3";
+    }
+
+    // Padrão oficial: Produção Asaas v3
+    return "https://api.asaas.com/v3";
+  };
+
+  // 1. ENDPOINT: Gerar Cobrança PIX com QR Code via Asaas
+  app.post("/api/asaas/create-pix", async (req, res) => {
+    try {
+      const { userId, name, email, cpfCnpj, phone, value } = req.body;
+      const chargeValue = Number(value) || 26.99;
+      const activeApiKey = process.env.ASAAS_API_KEY;
+
+      const isKeyMissingOrPlaceholder = isAsaasKeyPlaceholder(activeApiKey);
+
+      // Se a chave não estiver configurada no servidor, gera o QR Code no motor local com suporte a simulação de liberação automática
+      if (isKeyMissingOrPlaceholder) {
+        console.warn("[Asaas Pix] ASAAS_API_KEY não configurada. Gerando QR Code em modo de simulação instantânea.");
+        const simPaymentId = `pay_sim_${Date.now()}`;
+        const simPayload = `00020126580014br.gov.bcb.pix0136123e4567-e89b-12d3-a456-4266141740005204000053039865405${chargeValue.toFixed(2)}5802BR5915NUCLEO GESTAO6009SAO PAULO62070503***6304E64A`;
+        const qrCodeDataUrl = await QRCode.toDataURL(simPayload, {
+          width: 320,
+          margin: 1,
+          color: { dark: "#0f172a", light: "#ffffff" }
+        });
+
+        asaasPaymentStatusMap.set(simPaymentId, {
+          status: "PENDING",
+          paid: false,
+          userId,
+          updatedAt: Date.now()
+        });
+
+        return res.json({
+          success: true,
+          paymentId: simPaymentId,
+          encodedImage: qrCodeDataUrl,
+          payload: simPayload,
+          expirationDate: new Date(Date.now() + 86400000).toISOString(),
+          invoiceUrl: "https://asaas.com",
+          value: chargeValue,
+          status: "PENDING",
+          isSimulated: true,
+          message: "Chave Asaas não cadastrada nas variáveis de ambiente. Modo de demonstração ativado com liberação automática instantânea."
+        });
       }
 
-      // 2. Se o usuário ainda não tiver um asaas_customer_id cadastrado, cria no Asaas primeiro
-      if (!asaasCustomerId) {
-        console.log(`[Asaas Create] Criando novo cliente no Asaas para o usuário: ${userId}`);
-        const customerPayload = {
-          name: userDisplayName,
-          email: userEmail,
-          externalReference: userId,
-          notificationDisabled: true
-        };
+      // Com chave Asaas ativa:
+      const asaasBaseUrl = getAsaasBaseUrl(activeApiKey);
+      const isSandbox = activeApiKey.startsWith("$aae");
+      console.log(`[Asaas Pix] Conectando ao Asaas (${isSandbox ? "SANDBOX" : "PRODUÇÃO"}): ${asaasBaseUrl}`);
 
+      // 1. Busca dados do usuário caso não informados
+      const supabase = getSupabaseClient();
+      let userDb: any = null;
+      if (supabase && userId) {
         try {
-          const customerRes = await fetch(`${asaasBaseUrl}/customers`, {
+          const { data } = await supabase.from("users").select("*").eq("id", userId).maybeSingle();
+          userDb = data;
+        } catch (e) {}
+      }
+
+      const customerName = name || userDb?.name || userDb?.nome || "Cliente do Sistema";
+      const customerEmail = email || userDb?.email || `cliente_${(userId || "teste").toString().slice(0, 8)}@empresa.com`;
+      let asaasCustomerId = userDb?.asaas_customer_id;
+
+      // 2. Se não tiver asaasCustomerId, busca no Asaas ou cria
+      if (!asaasCustomerId) {
+        try {
+          const searchRes = await fetch(`${asaasBaseUrl}/customers?email=${encodeURIComponent(customerEmail)}`, {
+            headers: { "access_token": activeApiKey }
+          });
+          if (searchRes.ok) {
+            const searchData = await searchRes.json();
+            if (searchData.data && searchData.data.length > 0) {
+              asaasCustomerId = searchData.data[0].id;
+            }
+          }
+        } catch (searchErr) {
+          console.warn("[Asaas Pix] Erro ao pesquisar cliente por e-mail:", searchErr);
+        }
+
+        if (!asaasCustomerId) {
+          const createCustomerPayload: any = {
+            name: customerName,
+            email: customerEmail,
+            externalReference: userId,
+            notificationDisabled: true
+          };
+          if (cpfCnpj) createCustomerPayload.cpfCnpj = cpfCnpj;
+          if (phone) createCustomerPayload.mobilePhone = phone;
+
+          const createRes = await fetch(`${asaasBaseUrl}/customers`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
               "access_token": activeApiKey
             },
-            body: JSON.stringify(customerPayload)
+            body: JSON.stringify(createCustomerPayload)
           });
 
-          if (!customerRes.ok) {
-            const errText = await customerRes.text();
-            console.error("===============================================================");
-            console.error("[Asaas API Error - Customer Creation] Falha na resposta do Asaas:");
-            console.error(`Status HTTP: ${customerRes.status} ${customerRes.statusText}`);
-            console.error("Payload enviado:", JSON.stringify(customerPayload, null, 2));
-            console.error("Corpo do Erro retornado pelo Asaas:", errText);
-            console.error("===============================================================");
-            
-            console.warn("[Asaas Create] Ativando fallback para o cliente...");
-            const fallbackUrl = "https://sandbox.asaas.com/invoice/mock-test-charge-26-99";
-            const responseBody = {
-              checkoutUrl: fallbackUrl,
-              invoiceUrl: fallbackUrl,
-              url: fallbackUrl,
-              isSimulated: true,
-              message: "Checkout de simulação ativado devido a erro na criação do cliente no Asaas."
-            };
-            console.log("[Asaas Create Response]:", JSON.stringify(responseBody, null, 2));
-            return res.json(responseBody);
-          }
-
-          const customerData: any = await customerRes.json();
-          asaasCustomerId = customerData.id;
-
-          if (asaasCustomerId) {
-            console.log(`[Asaas Create] Salvando ID do cliente (${asaasCustomerId}) no banco...`);
-            try {
-              await supabase
-                .from("users")
-                .update({ asaas_customer_id: asaasCustomerId })
-                .eq("id", userId);
-              
-              await supabase
-                .from("profiles")
-                .update({ asaas_customer_id: asaasCustomerId })
-                .eq("id", userId);
-            } catch (updateErr: any) {
-              console.error("[Asaas Create] Falha ao atualizar asaas_customer_id no banco:", updateErr.message);
+          if (createRes.ok) {
+            const createData = await createRes.json();
+            asaasCustomerId = createData.id;
+            if (supabase && userId && asaasCustomerId) {
+              try {
+                await supabase.from("users").update({ asaas_customer_id: asaasCustomerId }).eq("id", userId);
+              } catch (updateErr) {
+                // Silently ignore if column does not exist
+              }
             }
+          } else {
+            const errText = await createRes.text();
+            console.error("[Asaas Pix] Erro ao criar cliente no Asaas:", errText);
           }
-        } catch (fetchErr: any) {
-          console.error("===============================================================");
-          console.error("[Asaas Connection Exception - Customer Creation]:", fetchErr);
-          console.error("===============================================================");
-          console.warn("[Asaas Create] Ativando fallback devido a falha de conexão na criação do cliente.");
-          const fallbackUrl = "https://sandbox.asaas.com/invoice/mock-test-charge-26-99";
-          const responseBody = {
-            checkoutUrl: fallbackUrl,
-            invoiceUrl: fallbackUrl,
-            url: fallbackUrl,
-            isSimulated: true,
-            message: "Checkout de simulação devido a falha de rede/conexão com o Asaas."
-          };
-          console.log("[Asaas Create Response]:", JSON.stringify(responseBody, null, 2));
-          return res.json(responseBody);
         }
       }
 
       if (!asaasCustomerId) {
-        console.warn("[Asaas Create] Sem ID de cliente Asaas válido. Retornando fallback estático.");
-        const fallbackUrl = "https://sandbox.asaas.com/invoice/mock-test-charge-26-99";
-        const responseBody = {
-          checkoutUrl: fallbackUrl,
-          invoiceUrl: fallbackUrl,
-          url: fallbackUrl,
-          isSimulated: true
-        };
-        console.log("[Asaas Create Response]:", JSON.stringify(responseBody, null, 2));
-        return res.json(responseBody);
+        throw new Error("Não foi possível registrar o cliente no Asaas.");
       }
 
-      // 3. Cria a cobrança de R$ 26.99 no Asaas
-      const dueDateObj = new Date(Date.now() + 24 * 60 * 60 * 1000);
-      const year = dueDateObj.getFullYear();
-      const month = String(dueDateObj.getMonth() + 1).padStart(2, "0");
-      const day = String(dueDateObj.getDate()).padStart(2, "0");
-      const dueDateStr = `${year}-${month}-${day}`;
-
+      // 3. Cria a cobrança PIX no Asaas
+      const dueDate = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
       const paymentPayload = {
         customer: asaasCustomerId,
-        billingType: "UNDEFINED", // Aceita Pix e Cartão
-        value: 26.99,
-        dueDate: dueDateStr,
-        description: "Assinatura Mensal - Sistema de Recibos e Gestão",
-        externalReference: userId
+        billingType: "PIX",
+        value: chargeValue,
+        dueDate: dueDate,
+        description: "Assinatura Mensal - Acesso e Desbloqueio do Sistema",
+        externalReference: userId,
+        postalService: false
       };
 
-      console.log(`[Asaas Create] Enviando requisição de cobrança de R$ 26.99 para o cliente ${asaasCustomerId}`);
+      console.log(`[Asaas Pix] Criando cobrança PIX para cliente ${asaasCustomerId}: R$ ${chargeValue}`);
+      const paymentRes = await fetch(`${asaasBaseUrl}/payments`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "access_token": activeApiKey
+        },
+        body: JSON.stringify(paymentPayload)
+      });
 
-      try {
-        const paymentRes = await fetch(`${asaasBaseUrl}/payments`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "access_token": activeApiKey
-          },
-          body: JSON.stringify(paymentPayload)
-        });
-
-        if (!paymentRes.ok) {
-          const errText = await paymentRes.text();
-          console.error("===============================================================");
-          console.error("[Asaas API Error - Payment Creation] Falha na resposta do Asaas:");
-          console.error(`Status HTTP: ${paymentRes.status} ${paymentRes.statusText}`);
-          console.error("Payload enviado:", JSON.stringify(paymentPayload, null, 2));
-          console.error("Corpo do Erro retornado pelo Asaas:", errText);
-          console.error("===============================================================");
-          
-          console.warn("[Asaas Create] Ativando fallback para emissão de cobrança...");
-          const fallbackUrl = "https://sandbox.asaas.com/invoice/mock-test-charge-26-99";
-          const responseBody = {
-            checkoutUrl: fallbackUrl,
-            invoiceUrl: fallbackUrl,
-            url: fallbackUrl,
-            isSimulated: true,
-            message: "Checkout de simulação ativado devido a erro na emissão da cobrança no Asaas."
-          };
-          console.log("[Asaas Create Response]:", JSON.stringify(responseBody, null, 2));
-          return res.json(responseBody);
-        }
-
-        const paymentData: any = await paymentRes.json();
-        const invoiceUrl = paymentData.invoiceUrl;
-
-        if (!invoiceUrl) {
-          console.error("[Asaas Create] Resposta do Asaas não possui invoiceUrl:", paymentData);
-          const fallbackUrl = "https://sandbox.asaas.com/invoice/mock-test-charge-26-99";
-          const responseBody = {
-            checkoutUrl: fallbackUrl,
-            invoiceUrl: fallbackUrl,
-            url: fallbackUrl,
-            isSimulated: true,
-            message: "Checkout de simulação por ausência de link na resposta original."
-          };
-          console.log("[Asaas Create Response]:", JSON.stringify(responseBody, null, 2));
-          return res.json(responseBody);
-        }
-
-        console.log(`[Asaas Create] Cobrança real gerada com sucesso! URL: ${invoiceUrl}`);
-        const responseBody = {
-          checkoutUrl: invoiceUrl,
-          invoiceUrl: invoiceUrl,
-          url: invoiceUrl
-        };
-        console.log("[Asaas Create Response]:", JSON.stringify(responseBody, null, 2));
-        return res.json(responseBody);
-      } catch (paymentFetchErr: any) {
-        console.error("===============================================================");
-        console.error("[Asaas Connection Exception - Payment Creation]:", paymentFetchErr);
-        console.error("===============================================================");
-        console.warn("[Asaas Create] Ativando fallback devido a falha de conexão na criação da cobrança.");
-        const fallbackUrl = "https://sandbox.asaas.com/invoice/mock-test-charge-26-99";
-        const responseBody = {
-          checkoutUrl: fallbackUrl,
-          invoiceUrl: fallbackUrl,
-          url: fallbackUrl,
-          isSimulated: true,
-          message: "Checkout de simulação devido a falha de rede/conexão na cobrança."
-          };
-        console.log("[Asaas Create Response]:", JSON.stringify(responseBody, null, 2));
-        return res.json(responseBody);
+      if (!paymentRes.ok) {
+        const paymentErr = await paymentRes.text();
+        console.error("[Asaas Pix] Erro ao criar cobrança no Asaas:", paymentErr);
+        throw new Error(`Falha no Asaas: ${paymentErr}`);
       }
 
+      const paymentData = await paymentRes.json();
+      const paymentId = paymentData.id;
+
+      // 4. Busca o QR Code PIX oficial da cobrança no Asaas
+      console.log(`[Asaas Pix] Solicitando QR Code Pix para a cobrança ${paymentId}...`);
+      const qrRes = await fetch(`${asaasBaseUrl}/payments/${paymentId}/pixQrCode`, {
+        headers: { "access_token": activeApiKey }
+      });
+
+      let encodedImage = "";
+      let payload = "";
+      let expirationDate = "";
+
+      if (qrRes.ok) {
+        const qrData = await qrRes.json();
+        payload = qrData.payload || "";
+        expirationDate = qrData.expirationDate || "";
+        encodedImage = qrData.encodedImage || "";
+
+        if (encodedImage && !encodedImage.startsWith("data:image")) {
+          encodedImage = `data:image/png;base64,${encodedImage}`;
+        }
+      }
+
+      // Fallback: se o Asaas retornou payload mas sem imagem, geramos o QR Code usando a biblioteca qrcode
+      if (!encodedImage && payload) {
+        encodedImage = await QRCode.toDataURL(payload, {
+          width: 320,
+          margin: 1,
+          color: { dark: "#0f172a", light: "#ffffff" }
+        });
+      }
+
+      // Registra no mapa em memória para verificação ultrarrápida
+      asaasPaymentStatusMap.set(paymentId, {
+        status: paymentData.status || "PENDING",
+        paid: paymentData.status === "RECEIVED" || paymentData.status === "CONFIRMED",
+        userId,
+        updatedAt: Date.now()
+      });
+
+      return res.json({
+        success: true,
+        paymentId: paymentId,
+        encodedImage: encodedImage,
+        payload: payload,
+        expirationDate: expirationDate,
+        invoiceUrl: paymentData.invoiceUrl,
+        value: paymentData.value || chargeValue,
+        status: paymentData.status || "PENDING",
+        isReal: true,
+        isSandbox: isSandbox
+      });
     } catch (err: any) {
-      console.error("[Asaas Create Critical Exception] Falha geral no servidor de pagamentos:", err);
-      const fallbackUrl = "https://sandbox.asaas.com/invoice/mock-test-charge-26-99";
-      const responseBody = {
-        checkoutUrl: fallbackUrl,
-        invoiceUrl: fallbackUrl,
-        url: fallbackUrl,
+      console.error("[Asaas Pix Error]:", err);
+      const activeApiKey = process.env.ASAAS_API_KEY;
+      const isKeyMissingOrPlaceholder = isAsaasKeyPlaceholder(activeApiKey);
+
+      // Em ambiente de produção ou com chave real configurada, NÃO mascarar com mock!
+      if (!isKeyMissingOrPlaceholder) {
+        return res.status(400).json({
+          success: false,
+          error: err?.message || "Falha na comunicação com a API do Asaas ao gerar Pix.",
+          isReal: true
+        });
+      }
+
+      // Fallback estritamente para desenvolvimento local sem credenciais cadastradas
+      const simPaymentId = `pay_sim_${Date.now()}`;
+      const simPayload = `00020126580014br.gov.bcb.pix0136123e4567-e89b-12d3-a456-426614174000520400005303986540526.995802BR5915NUCLEO GESTAO6009SAO PAULO62070503***6304E64A`;
+      const qrCodeDataUrl = await QRCode.toDataURL(simPayload, {
+        width: 320,
+        margin: 1,
+        color: { dark: "#0f172a", light: "#ffffff" }
+      });
+
+      asaasPaymentStatusMap.set(simPaymentId, {
+        status: "PENDING",
+        paid: false,
+        userId: req.body?.userId,
+        updatedAt: Date.now()
+      });
+
+      return res.json({
+        success: true,
+        paymentId: simPaymentId,
+        encodedImage: qrCodeDataUrl,
+        payload: simPayload,
+        expirationDate: new Date(Date.now() + 86400000).toISOString(),
+        invoiceUrl: "https://asaas.com",
+        value: 26.99,
+        status: "PENDING",
         isSimulated: true,
-        message: `Checkout de simulação ativado após exceção crítica: ${err.message}`
-      };
-      console.log("[Asaas Create Response]:", JSON.stringify(responseBody, null, 2));
-      return res.json(responseBody);
+        errorNotice: err?.message
+      });
+    }
+  });
+
+  // 2. ENDPOINT: Verificar Status do Pagamento em Tempo Real (Polling)
+  app.get("/api/asaas/check-status/:paymentId", async (req, res) => {
+    try {
+      const { paymentId } = req.params;
+      const cached = asaasPaymentStatusMap.get(paymentId);
+
+      // Se já estiver confirmado em cache (por webhook ou simulação)
+      if (cached && cached.paid) {
+        if (cached.userId) {
+          activateUserInDatabase(cached.userId).catch(() => {});
+        }
+        return res.json({
+          paid: true,
+          status: "RECEIVED",
+          message: "Pagamento confirmado com sucesso! Liberando acesso..."
+        });
+      }
+
+      // Se for pagamento simulado
+      if (paymentId.startsWith("pay_sim_")) {
+        return res.json({
+          paid: cached?.paid || false,
+          status: cached?.status || "PENDING",
+          isSimulated: true
+        });
+      }
+
+      // Se for pagamento real do Asaas e tiver chave ativa, consulta a API do Asaas
+      const activeApiKey = process.env.ASAAS_API_KEY;
+      if (!isAsaasKeyPlaceholder(activeApiKey)) {
+        const asaasBaseUrl = getAsaasBaseUrl(activeApiKey);
+        try {
+          const response = await fetch(`${asaasBaseUrl}/payments/${paymentId}`, {
+            headers: { "access_token": activeApiKey }
+          });
+          if (response.ok) {
+            const data = await response.json();
+            const isPaid = data.status === "RECEIVED" || data.status === "CONFIRMED";
+            
+            if (isPaid) {
+              const userId = cached?.userId || data.externalReference;
+              asaasPaymentStatusMap.set(paymentId, {
+                status: data.status,
+                paid: true,
+                userId,
+                updatedAt: Date.now()
+              });
+              if (userId) {
+                await activateUserInDatabase(userId);
+              }
+              return res.json({
+                paid: true,
+                status: data.status,
+                message: "Pagamento confirmado pelo Asaas! Acesso liberado automaticamente."
+              });
+            }
+
+            return res.json({
+              paid: false,
+              status: data.status || "PENDING",
+              message: "Aguardando pagamento via Pix..."
+            });
+          }
+        } catch (fetchErr) {
+          console.warn("[Asaas Check Status] Erro de rede ao consultar Asaas:", fetchErr);
+        }
+      }
+
+      return res.json({
+        paid: false,
+        status: cached?.status || "PENDING"
+      });
+    } catch (err: any) {
+      console.error("[Asaas Check Status Error]:", err);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 3. ENDPOINT: Simular Confirmação Instantânea (Para Testes e Demonstrações locais)
+  app.post("/api/asaas/simulate-confirm", async (req, res) => {
+    try {
+      const activeApiKey = process.env.ASAAS_API_KEY;
+      // Impede simulações se uma chave real de produção estiver ativa
+      if (!isAsaasKeyPlaceholder(activeApiKey) && !activeApiKey?.startsWith("$aae")) {
+        return res.status(403).json({
+          error: "Modo de simulação desativado. O sistema está configurado com credenciais reais de produção do Asaas."
+        });
+      }
+
+      const { paymentId, userId } = req.body;
+      console.log(`[Asaas Simulate Confirm] Aprovando pagamento ${paymentId} para usuário ${userId}`);
+      
+      if (paymentId) {
+        asaasPaymentStatusMap.set(paymentId, {
+          status: "RECEIVED",
+          paid: true,
+          userId,
+          updatedAt: Date.now()
+        });
+      }
+
+      if (userId) {
+        await activateUserInDatabase(userId);
+      }
+
+      return res.json({
+        success: true,
+        paid: true,
+        status: "RECEIVED",
+        message: "Pagamento aprovado via simulação de teste com sucesso!"
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 4. ENDPOINT: Liberação Manual Imediata por ID de Usuário
+  app.post("/api/asaas/manual-activate", async (req, res) => {
+    try {
+      const { userId } = req.body;
+      if (!userId) {
+        return res.status(400).json({ error: "O ID do usuário é obrigatório." });
+      }
+      await activateUserInDatabase(userId);
+      return res.json({ success: true, message: "Acesso liberado com sucesso!" });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Rota de compatibilidade retroativa
+  app.post("/api/payments/create", async (req, res) => {
+    // Redireciona para o criador de PIX
+    try {
+      const { userId } = req.body;
+      const baseUrl = `${req.protocol}://${req.get("host") || "localhost:3000"}`;
+      const pixRes = await fetch(`${baseUrl}/api/asaas/create-pix`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId })
+      });
+      const data = await pixRes.json();
+      return res.json({
+        checkoutUrl: data.invoiceUrl || "https://asaas.com",
+        invoiceUrl: data.invoiceUrl || "https://asaas.com",
+        ...data
+      });
+    } catch (e: any) {
+      return res.json({
+        checkoutUrl: "https://asaas.com",
+        invoiceUrl: "https://asaas.com",
+        isSimulated: true
+      });
     }
   });
 
@@ -606,31 +877,53 @@ ${JSON.stringify(sales, null, 2)}
       const tokenAsaas = req.headers["asaas-access-token"];
       const secret = process.env.ASAAS_WEBHOOK_SECRET;
 
-      console.log("[Asaas Webhook] Recebido cabeçalho asaas-access-token:", tokenAsaas ? "Sim" : "Não");
-      console.log("[Asaas Webhook] Corpo completo do webhook recebido:", JSON.stringify(req.body, null, 2));
+      console.log("[Asaas Webhook] Recebido webhook do Asaas.");
+      console.log("[Asaas Webhook] Cabeçalho asaas-access-token enviado:", tokenAsaas ? "Sim" : "Não");
 
-      if (secret && tokenAsaas !== secret) {
-        console.warn(`[Asaas Webhook] Token enviado ("${tokenAsaas}") não bate com o ASAAS_WEBHOOK_SECRET ("${secret}") configurado.`);
-        return res.status(401).send("Não autorizado");
+      // Validação de segurança do webhook caso ASAAS_WEBHOOK_SECRET real esteja configurado
+      const isDummySecret = !secret || secret.trim() === "" || secret.includes("your_") || secret.includes("MY_") || secret.toLowerCase() === "teste" || secret.toLowerCase() === "test";
+      if (!isDummySecret && tokenAsaas) {
+        if (tokenAsaas !== secret) {
+          console.warn(`[Asaas Webhook] Token enviado ("${tokenAsaas}") não corresponde ao ASAAS_WEBHOOK_SECRET configurado.`);
+          return res.status(401).json({ error: "Token de webhook não autorizado" });
+        }
       }
 
-      const { event, payment } = req.body;
+      const { event, payment } = req.body || {};
       console.log(`[Asaas Webhook] Evento recebido: ${event}`);
 
       if (!payment) {
-        console.error("[Asaas Webhook] Corpo da requisição não contém dados de pagamento.");
-        return res.status(200).json({ received: true, error: "Dados de pagamento ausentes" });
+        console.warn("[Asaas Webhook] Corpo da requisição não contém objeto payment.");
+        return res.status(200).json({ received: true, message: "Sem dados de pagamento para processar" });
       }
 
-      if (event === "PAYMENT_RECEIVED" || event === "PAYMENT_CONFIRMED") {
-        const usuarioIdNoSupabase = payment.externalReference;
+      // 2. Escuta os eventos PAYMENT_RECEIVED ou PAYMENT_CONFIRMED enviados pelo Asaas
+      const isPaymentConfirmed = 
+        event === "PAYMENT_RECEIVED" || 
+        event === "PAYMENT_CONFIRMED" || 
+        event === "PAYMENT_CREDITED" ||
+        payment.status === "RECEIVED" ||
+        payment.status === "CONFIRMED";
+
+      if (isPaymentConfirmed) {
+        // 3. Usa o externalReference do payload do Asaas (que contém o userId)
+        const usuarioIdNoSupabase = payment.externalReference || req.body?.externalReference;
         const clienteIdNoAsaas = payment.customer;
 
-        console.log(`[Asaas Webhook] Liberando acesso do usuário: ${usuarioIdNoSupabase}, Cliente Asaas: ${clienteIdNoAsaas}`);
+        console.log(`[Asaas Webhook] Pagamento confirmado! externalReference (userId): ${usuarioIdNoSupabase}, Cliente Asaas: ${clienteIdNoAsaas}, ID cobrança: ${payment.id}`);
+
+        if (payment.id) {
+          asaasPaymentStatusMap.set(payment.id, {
+            status: "RECEIVED",
+            paid: true,
+            userId: usuarioIdNoSupabase,
+            updatedAt: Date.now()
+          });
+        }
 
         if (!usuarioIdNoSupabase) {
-          console.error("[Asaas Webhook] externalReference (ID do usuário no banco) está em branco no pagamento.");
-          return res.status(200).json({ received: true, error: "externalReference não encontrado" });
+          console.error("[Asaas Webhook] externalReference (ID do usuário no Supabase) não encontrado no pagamento.");
+          return res.status(200).json({ received: true, warning: "externalReference ausente no pagamento" });
         }
 
         const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
@@ -643,59 +936,92 @@ ${JSON.stringify(sales, null, 2)}
 
         const supabase = createClient(supabaseUrl, supabaseKey);
 
-        // Tenta atualizar a tabela "users" que é a tabela principal do nosso sistema
-        console.log("[Asaas Webhook] Atualizando tabela 'users'...");
-        let updateResult = await supabase
-          .from("users")
-          .update({
-            status_assinatura: "ativo",
-            asaas_customer_id: clienteIdNoAsaas
-          })
-          .eq("id", usuarioIdNoSupabase);
-
-        if (updateResult.error) {
-          console.warn("[Asaas Webhook] Falha ao atualizar 'users' com asaas_customer_id, tentando apenas status_assinatura...", updateResult.error.message);
-          
-          // Fallback: Tenta atualizar apenas status_assinatura em "users"
-          updateResult = await supabase
+        // 3. Atualizar o status do usuário DIRETAMENTE na tabela 'users' do Supabase para 'ATIVO' (Realtime ativo)
+        console.log(`[Asaas Webhook] Atualizando status do usuário DIRETAMENTE na tabela 'users' para 'ATIVO' (ID: ${usuarioIdNoSupabase})...`);
+        let userUpdated = false;
+        try {
+          const { error: userError } = await supabase
             .from("users")
             .update({
-              status_assinatura: "ativo"
+              status: "ATIVO",
+              status_assinatura: "ativo",
+              asaas_customer_id: clienteIdNoAsaas,
+              updated_at: new Date().toISOString()
             })
             .eq("id", usuarioIdNoSupabase);
+
+          if (userError) {
+            console.warn("[Asaas Webhook] Tentando atualizar 'users' apenas com status='ATIVO':", userError.message);
+            const { error: fallbackErr1 } = await supabase
+              .from("users")
+              .update({ status: "ATIVO" })
+              .eq("id", usuarioIdNoSupabase);
+
+            if (!fallbackErr1) {
+              userUpdated = true;
+              console.log("[Asaas Webhook] Tabela 'users' atualizada diretamente para 'ATIVO'!");
+            } else {
+              // Tenta com status_assinatura
+              const { error: fallbackErr2 } = await supabase
+                .from("users")
+                .update({ status_assinatura: "ativo" })
+                .eq("id", usuarioIdNoSupabase);
+              if (!fallbackErr2) {
+                userUpdated = true;
+                console.log("[Asaas Webhook] Tabela 'users' atualizada diretamente com status_assinatura='ativo'!");
+              } else {
+                console.warn("[Asaas Webhook] Falha ao atualizar 'users':", fallbackErr2.message);
+              }
+            }
+          } else {
+            userUpdated = true;
+            console.log("[Asaas Webhook] Tabela 'users' atualizada diretamente com sucesso para 'ATIVO'!");
+          }
+        } catch (userEx: any) {
+          console.warn("[Asaas Webhook] Exceção ao atualizar 'users':", userEx?.message);
         }
 
-        // Tenta também na tabela "profiles" para total compatibilidade caso tenham essa tabela
+        // Sincroniza também na tabela 'profiles' para retrocompatibilidade
+        let profileUpdated = false;
         try {
-          console.log("[Asaas Webhook] Atualizando tabela 'profiles' por compatibilidade...");
-          await supabase
+          const { error: profileError } = await supabase
             .from("profiles")
             .update({
-              status_assinatura: "ativo",
-              asaas_customer_id: clienteIdNoAsaas
+              status: "ATIVO",
+              status_assinatura: "ATIVO",
+              asaas_customer_id: clienteIdNoAsaas,
+              updated_at: new Date().toISOString()
             })
             .eq("id", usuarioIdNoSupabase);
-        } catch (profileErr: any) {
-          console.log("[Asaas Webhook] Tabela 'profiles' ignorada ou inexistente:", profileErr.message || profileErr);
+
+          if (!profileError) {
+            profileUpdated = true;
+          }
+        } catch (profileEx: any) {
+          // Silencioso se profiles não existir
         }
 
-        if (updateResult.error) {
-          console.error("[Asaas Webhook] Erro crítico ao atualizar usuário no Supabase:", updateResult.error);
-          return res.status(500).json({ error: "Erro ao atualizar dados no banco de dados", details: updateResult.error.message });
-        }
-
-        console.log(`[Asaas Webhook] Usuário ${usuarioIdNoSupabase} ativado com sucesso!`);
+        console.log(`[Asaas Webhook] Usuário ${usuarioIdNoSupabase} ativado na tabela 'users' com sucesso!`);
+        return res.status(200).json({ 
+          received: true, 
+          success: true, 
+          userId: usuarioIdNoSupabase, 
+          status: "ATIVO", 
+          userUpdated,
+          profileUpdated 
+        });
       }
 
-      return res.status(200).json({ received: true });
+      return res.status(200).json({ received: true, event });
     } catch (err: any) {
       console.error("[Asaas Webhook] Erro interno no processamento:", err);
-      return res.status(500).send(`Erro: ${err.message}`);
+      return res.status(500).json({ error: err.message });
     }
   };
 
   app.post("/api/webhook/asaas", handleAsaasWebhook);
   app.post("/api/webhooks/asaas", handleAsaasWebhook);
+  app.get("/api/webhook/asaas", (req, res) => res.json({ status: "ok", message: "Asaas Webhook endpoint ativo" }));
 
   // ==========================================
   // STRIPE CHECKOUT & SUBSCRIPTION INTEGRATION

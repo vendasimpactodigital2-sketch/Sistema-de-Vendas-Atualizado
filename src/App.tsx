@@ -39,6 +39,7 @@ import { Sparkles, DollarSign, Building2, ShieldAlert, TrendingDown, RefreshCw, 
 import { motion, AnimatePresence } from "motion/react";
 import { WeeklyGoalModal } from "./components/WeeklyGoalModal";
 import { CashRegisterModal } from "./components/CashRegisterModal";
+import { TelaDeBloqueio } from "./components/AsaasPixCheckout";
 import {
   isSupabaseConfigured,
   getSupabase,
@@ -194,8 +195,14 @@ export default function App() {
   const isSubscriptionLocked = useMemo(() => {
     if (!currentUser) return false;
     
-    // Rigorously enforce lock if subscription status is 'bloqueado', 'vencido', or 'expired' (case-insensitive, trimmed) or user is pedro@gmail.com
+    // Rigorously enforce lock if subscription status is 'bloqueado', 'vencido', or 'expired' (case-insensitive, trimmed)
     const status = (currentUser.status_assinatura || (currentUser as any).status || "").toString().trim().toLowerCase();
+    
+    // Se o status for ativo, o acesso NUNCA deve ser bloqueado
+    if (status === "ativo" || status === "active") {
+      return false;
+    }
+
     const isPedro = currentUser.email?.toLowerCase().trim() === "pedro@gmail.com";
     if (status === "bloqueado" || status === "vencido" || status === "expired" || isPedro) {
       return true;
@@ -515,7 +522,7 @@ export default function App() {
     }
   });
 
-  // Real-time check of user status from Supabase whenever any dashboard page is loaded (activeTab changes)
+  // Real-time check of user status directly from Supabase 'users' table
   useEffect(() => {
     const checkLiveUserStatus = async () => {
       if (!currentUser?.id || !isSupabaseConfigured()) return;
@@ -524,31 +531,101 @@ export default function App() {
         const client = getSupabase();
         if (!client) return;
 
-        const { data, error } = await client
-          .from('users')
-          .select('status_assinatura, status')
-          .eq('id', currentUser.id)
-          .maybeSingle();
+        let dbStatus = "";
+        
+        // 1. Consulta diretamente a tabela 'users' (onde o Realtime está habilitado)
+        try {
+          const { data: userData } = await client
+            .from('users')
+            .select('status, status_assinatura')
+            .eq('id', currentUser.id)
+            .maybeSingle();
+          if (userData) {
+            dbStatus = (userData.status || userData.status_assinatura || "").toString().trim();
+          }
+        } catch (e) {}
 
-        if (!error && data) {
-          const dbStatus = (data.status || data.status_assinatura || "").toString().trim();
-          const dbStatusLower = dbStatus.toLowerCase();
-          const localStatusLower = (currentUser.status || currentUser.status_assinatura || "").toString().trim().toLowerCase();
+        // 2. Fallback secundário
+        if (!dbStatus) {
+          try {
+            const { data: profileData } = await client
+              .from('profiles')
+              .select('status, status_assinatura')
+              .eq('id', currentUser.id)
+              .maybeSingle();
+            if (profileData) {
+              dbStatus = (profileData.status || profileData.status_assinatura || "").toString().trim();
+            }
+          } catch (e) {}
+        }
+
+        if (dbStatus) {
+          const dbStatusUpper = dbStatus.toUpperCase();
+          const localStatusUpper = (currentUser.status || currentUser.status_assinatura || "").toString().trim().toUpperCase();
           
-          if (dbStatusLower !== localStatusLower) {
-            console.log(`[Real-time Check] Updating user status from DB: ${dbStatus}`);
-            const updatedUser = { ...currentUser, status_assinatura: dbStatus, status: dbStatus };
+          if (dbStatusUpper !== localStatusUpper) {
+            console.log(`[Real-time Check] Atualizando status do usuário diretamente da tabela 'users': ${dbStatus}`);
+            const updatedUser = { 
+              ...currentUser, 
+              status_assinatura: dbStatusUpper === "ATIVO" ? "ativo" : dbStatus, 
+              status: dbStatus 
+            };
             localStorage.setItem("NUCLEO_CURRENT_USER", JSON.stringify(updatedUser));
             setCurrentUser(updatedUser);
           }
         }
       } catch (err) {
-        console.error("Error performing immediate user status check:", err);
+        console.error("Erro ao verificar status imediato do usuário na tabela 'users':", err);
       }
     };
 
     checkLiveUserStatus();
   }, [activeTab, currentUser?.id]);
+
+  // Supabase Realtime: Escuta eventos de alteração DIRETAMENTE na tabela 'users' para liberação instantânea
+  useEffect(() => {
+    if (!currentUser?.id || !isSupabaseConfigured()) return;
+    const client = getSupabase();
+    if (!client) return;
+
+    console.log(`[Supabase Realtime App] Monitorando atualizações diretamente na tabela 'users' do usuário ${currentUser.id}...`);
+
+    const channel = client
+      .channel(`app-users-status-${currentUser.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "users",
+          filter: `id=eq.${currentUser.id}`
+        },
+        (payload: any) => {
+          console.log("[Supabase Realtime App] Alteração detectada diretamente na tabela 'users':", payload.new);
+          const newStatus = (payload.new?.status || payload.new?.status_assinatura || "").toString().trim();
+          if (newStatus) {
+            const isNowAtivo = newStatus.toUpperCase() === "ATIVO" || newStatus.toUpperCase() === "ACTIVE";
+            setCurrentUser(prev => {
+              if (!prev) return null;
+              const updated = {
+                ...prev,
+                status: newStatus,
+                status_assinatura: isNowAtivo ? "ativo" : newStatus
+              };
+              try {
+                localStorage.setItem("NUCLEO_CURRENT_USER", JSON.stringify(updated));
+              } catch (e) {}
+              return updated;
+            });
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      client.removeChannel(channel);
+    };
+  }, [currentUser?.id]);
 
   // Compile all orders for AI context beautifully and compactly
   const allOrdersForAi = React.useMemo(() => {
@@ -3704,18 +3781,16 @@ export default function App() {
   // EXPLICIT FRONTEND SUBSCRIPTION WALL: If status is 'vencido', 'bloqueado' or 'expired', or email is 'pedro@gmail.com', force immediate return of the lock screen!
   const directStatusStr = (currentUser?.status_assinatura || (currentUser as any)?.status || "").toString().trim().toLowerCase();
   const isPedroUser = currentUser?.email?.toLowerCase().trim() === "pedro@gmail.com";
-  if (directStatusStr === "vencido" || directStatusStr === "bloqueado" || directStatusStr === "expired" || isPedroUser) {
-    return <TelaDeBloqueio currentUser={currentUser} handleLogout={handleLogout} />;
-  }
-
-  if (isSubscriptionLocked) {
-    return <TelaDeBloqueio currentUser={currentUser} handleLogout={handleLogout} />;
-  }
-
+  const isLocked = directStatusStr !== "ativo" && (directStatusStr === "vencido" || directStatusStr === "bloqueado" || directStatusStr === "expired" || isPedroUser || isSubscriptionLocked);
+  
   const handleUpdateCurrentUser = (updatedUser: User) => {
     setCurrentUser(updatedUser);
     localStorage.setItem("NUCLEO_CURRENT_USER", JSON.stringify(updatedUser));
   };
+
+  if (isLocked) {
+    return <TelaDeBloqueio currentUser={currentUser} handleLogout={handleLogout} onUnlock={handleUpdateCurrentUser} />;
+  }
 
   const handleSaveGoalPrompt = () => {
     const val = parseBrazilianValue(tempGoalValue);
@@ -5550,317 +5625,6 @@ export default function App() {
         customWeekdayGoals={customWeekdayGoals}
         setCustomWeekdayGoals={setCustomWeekdayGoals}
       />
-    </div>
-  );
-}
-
-// Dedicated lock screen component to block access completely
-export function TelaDeBloqueio({ currentUser, handleLogout }: { currentUser: any; handleLogout: () => void }) {
-  const [loading, setLoading] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
-
-  const statusLabel = currentUser?.status_assinatura === "bloqueado" 
-    ? "Acesso Bloqueado Administrativamente"
-    : currentUser?.status_assinatura === "vencido"
-      ? "Assinatura Vencida"
-      : "Assinatura Expirada (expired)";
-
-  // Warning siren sound effect loop (descending alarm sound to resemble closing down/critical system suspension)
-  React.useEffect(() => {
-    let intervalId: any;
-    
-    const playWarningSiren = () => {
-      try {
-        const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-        if (audioCtx.state === "suspended") {
-          return; // Wait for user interaction gesture
-        }
-        
-        const now = audioCtx.currentTime;
-        
-        // Sound combination: Sawtooth descending sweep paired with a triangle sub-octave to sound rich and warning-like
-        const osc1 = audioCtx.createOscillator();
-        const osc2 = audioCtx.createOscillator();
-        const gainNode = audioCtx.createGain();
-        
-        osc1.type = "sawtooth";
-        osc1.frequency.setValueAtTime(520, now);
-        osc1.frequency.linearRampToValueAtTime(260, now + 0.65); // Descending sweep
-        
-        osc2.type = "triangle";
-        osc2.frequency.setValueAtTime(525, now);
-        osc2.frequency.linearRampToValueAtTime(262, now + 0.65);
-        
-        gainNode.gain.setValueAtTime(0.08, now);
-        gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.63);
-        
-        osc1.connect(gainNode);
-        osc2.connect(gainNode);
-        gainNode.connect(audioCtx.destination);
-        
-        osc1.start(now);
-        osc1.stop(now + 0.65);
-        
-        osc2.start(now);
-        osc2.stop(now + 0.65);
-      } catch (e) {
-        console.warn("AudioContext error:", e);
-      }
-    };
-    
-    // Play immediately and repeat every 1.8 seconds
-    playWarningSiren();
-    intervalId = setInterval(playWarningSiren, 1800);
-    
-    // Resume audio context and play warning on first user click anywhere on screen
-    const triggerAudioOnGesture = () => {
-      try {
-        const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-        if (audioCtx.state === "suspended") {
-          audioCtx.resume();
-        }
-        playWarningSiren();
-      } catch (e) {}
-    };
-    
-    window.addEventListener("click", triggerAudioOnGesture);
-    return () => {
-      clearInterval(intervalId);
-      window.removeEventListener("click", triggerAudioOnGesture);
-    };
-  }, []);
-
-  const [isGeneratingPayment, setIsGeneratingPayment] = useState(false);
-
-  const handlePaymentClick = async () => {
-    if (isGeneratingPayment) return;
-    setIsGeneratingPayment(true);
-    try {
-      // 1. Tenta chamar o endpoint seguro do nosso servidor backend para criar a cobrança
-      const response = await fetch("/api/payments/create", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ userId: currentUser?.id })
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        const checkoutUrl = data.checkoutUrl || data.invoiceUrl || data.url;
-        if (checkoutUrl) {
-          if (window.top) {
-            window.top.location.href = checkoutUrl;
-          } else {
-            window.location.href = checkoutUrl;
-          }
-          return;
-        }
-      }
-      throw new Error("Resposta da API de pagamento inválida ou malsucedida");
-    } catch (apiError) {
-      console.warn("[Asaas] Erro ao chamar API do servidor backend. Tentando via Proxy ou Fallback...", apiError);
-      
-      // 2. Se a chamada ao backend falhou por algum motivo de rede, tentamos usar o proxy do Vite para simular ou criar diretamente se houver token no client-side
-      const clientToken = (import.meta as any).env.VITE_ASAAS_TOKEN || "";
-      if (clientToken && clientToken.trim() !== "") {
-        try {
-          const isSandbox = clientToken.startsWith("$aae");
-          const proxyUrl = isSandbox ? "/api/asaas-sandbox-proxy" : "/api/asaas-proxy";
-          
-          // Criando cliente via Proxy para evitar CORS
-          const customerRes = await fetch(`${proxyUrl}/customers`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "access_token": clientToken
-            },
-            body: JSON.stringify({
-              name: currentUser?.name || currentUser?.nome || "Cliente de Teste",
-              email: currentUser?.email || "financeiro@cliente.com",
-              externalReference: currentUser?.id,
-              notificationDisabled: true
-            })
-          });
-          
-          if (customerRes.ok) {
-            const customerData = await customerRes.json();
-            const customerId = customerData.id;
-            
-            // Criando cobrança via Proxy para evitar CORS
-            const paymentRes = await fetch(`${proxyUrl}/payments`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "access_token": clientToken
-              },
-              body: JSON.stringify({
-                customer: customerId,
-                billingType: "PIX",
-                value: 26.99,
-                dueDate: new Date(Date.now() + 86400000).toISOString().split("T")[0],
-                description: "Assinatura Mensal - Controle Financeiro Núcleo",
-                externalReference: currentUser?.id
-              })
-            });
-            
-            if (paymentRes.ok) {
-              const paymentData = await paymentRes.json();
-              const invoiceUrl = paymentData.invoiceUrl || paymentData.bankSlipUrl;
-              if (invoiceUrl) {
-                if (window.top) {
-                  window.top.location.href = invoiceUrl;
-                } else {
-                  window.location.href = invoiceUrl;
-                }
-                return;
-              }
-            }
-          }
-        } catch (proxyErr) {
-          console.error("[Asaas Proxy Exception]:", proxyErr);
-        }
-      }
-      
-      // 3. Fallback estático de contingência caso todas as APIs e proxies falhem, garantindo que o usuário nunca fique travado
-      const fallbackUrl = "https://www.asaas.com/c/zoltahbo8tkm6axg";
-      if (window.top) {
-        window.top.location.href = fallbackUrl;
-      } else {
-        window.location.href = fallbackUrl;
-      }
-    } finally {
-      setIsGeneratingPayment(false);
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-gradient-to-b from-brand-dark-navy via-slate-950 to-brand-dark-navy text-slate-100 flex flex-col justify-between font-sans relative overflow-hidden">
-      {/* Decorative strobe pulsing alerts */}
-      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-red-600/5 rounded-full blur-[140px] pointer-events-none animate-pulse duration-[3000ms]" />
-      <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-rose-600/5 rounded-full blur-[140px] pointer-events-none animate-pulse duration-[4000ms]" />
-
-      {/* 🚨 Flashing Red Emergency Header Banner */}
-      <div className="bg-red-950/90 border-b-2 border-red-500/30 py-3 px-4 text-center z-20 flex items-center justify-center gap-2 animate-pulse">
-        <AlertTriangle className="h-4 w-4 text-red-500 shrink-0 animate-bounce" />
-        <span className="text-xs sm:text-sm font-black tracking-widest text-red-400 uppercase font-mono">
-          🚨 ALERTA GERAL DO SISTEMA: ASSINATURA EXIGIDA PARA LIBERAÇÃO DE ACESSO 🚨
-        </span>
-        <AlertTriangle className="h-4 w-4 text-red-500 shrink-0 animate-bounce" />
-      </div>
-
-      {/* Header bar of Billing Screen */}
-      <header className="border-b border-slate-800 bg-slate-950/60 py-4.5 px-6 flex items-center justify-between backdrop-blur-md z-10">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-red-500/15 text-red-500 border border-red-500/30 rounded-xl animate-pulse">
-            <ShieldAlert className="h-5 w-5" />
-          </div>
-          <div>
-            <span className="text-sm font-black text-slate-100 uppercase tracking-widest block font-sans">SISTEMA SUSPENSO</span>
-            <span className="text-[10px] text-red-400 font-mono uppercase font-black tracking-wider">{statusLabel}</span>
-          </div>
-        </div>
-        <button 
-          onClick={handleLogout}
-          className="px-4 py-2.5 bg-red-950/20 hover:bg-red-500 hover:text-slate-950 text-xs font-black text-red-400 border border-red-500/40 rounded-xl transition-all cursor-pointer flex items-center gap-2 uppercase tracking-wider hover:scale-[1.03] shadow-md"
-        >
-          <span>Sair do Sistema</span>
-        </button>
-      </header>
-
-      {/* Content Area */}
-      <main className="flex-1 flex flex-col items-center justify-center p-6 z-10 max-w-2xl mx-auto text-center space-y-7 my-4 animate-fade-in">
-        {/* Animated Warning bell with audio wave effect */}
-        <div className="relative">
-          <div className="absolute inset-0 bg-red-600/25 rounded-full blur-2xl animate-ping" style={{ animationDuration: "1.2s" }} />
-          <div className="relative p-6.5 bg-red-950/40 border-2 border-red-500 rounded-full text-red-500 flex items-center justify-center animate-bounce">
-            <Bell className="h-12 w-12 text-red-500" />
-          </div>
-          <div className="absolute -bottom-2 -right-4 bg-slate-900 border border-slate-800 text-[9px] font-black font-mono text-brand-cyan uppercase tracking-widest px-2.5 py-1 rounded-full flex items-center gap-1.5 shadow-md">
-            <span className="inline-block w-1.5 h-1.5 bg-brand-cyan rounded-full animate-ping" />
-            <span>🔊 ALERTA SONORO</span>
-          </div>
-        </div>
-
-        <div className="space-y-3.5">
-          <h1 className="text-2xl sm:text-4.5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-white via-slate-150 to-red-400 uppercase tracking-tight font-sans leading-none">
-            Acesso Suspenso Temporariamente! ⏳
-          </h1>
-          <p className="text-xs sm:text-base text-slate-300 leading-relaxed font-sans max-w-xl mx-auto">
-            Olá <strong className="text-white">{currentUser?.name || "Usuário"}</strong>, sua conta foi suspensa por expiração ou bloqueio de assinatura (<span className="text-red-400 font-mono font-bold uppercase">{currentUser?.status_assinatura || "bloqueado"}</span>). 
-            <br />
-            <span className="text-slate-400 mt-2 block text-xs sm:text-sm">
-              O alerta sonoro continuará tocando e a tela permanecerá bloqueada até você optar por sair ou ativar seu plano.
-            </span>
-          </p>
-        </div>
-
-        {/* Pulsing Action Box */}
-        <div className="p-6 sm:p-8 bg-gradient-to-b from-slate-900 to-slate-950 border-2 border-red-500/40 rounded-3xl w-full max-w-md space-y-5 shadow-[0_0_50px_rgba(239,68,68,0.15)] relative">
-          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-48 h-0.5 bg-red-500 animate-pulse rounded-full" />
-          
-          <div className="text-center space-y-1.5">
-            <span className="text-[10px] sm:text-xs font-black uppercase text-brand-cyan tracking-widest block font-sans">PLANO ILIMITADO COMPLETO</span>
-            <div className="flex items-baseline justify-center gap-1.5">
-              <span className="text-sm text-slate-400">Apenas</span>
-              <span className="text-4xl font-black text-white font-sans tracking-tight">R$ 26,99</span>
-              <span className="text-sm text-slate-400">/ mês</span>
-            </div>
-          </div>
-
-          <ul className="text-xs text-slate-400 text-left space-y-2.5 py-3.5 border-t border-b border-slate-850 font-sans">
-            <li className="flex items-center gap-2.5">
-              <CheckCircle className="h-4.5 w-4.5 text-brand-cyan shrink-0" />
-              <span>Emissão ilimitada de recibos e orçamentos em PDF</span>
-            </li>
-            <li className="flex items-center gap-2.5">
-              <CheckCircle className="h-4.5 w-4.5 text-brand-cyan shrink-0" />
-              <span>Fluxo de Caixa Sincronizado e despesas integradas</span>
-            </li>
-            <li className="flex items-center gap-2.5">
-              <CheckCircle className="h-4.5 w-4.5 text-brand-cyan shrink-0" />
-              <span>Controle de estoque inteligente e leitura de cupom via IA</span>
-            </li>
-            <li className="flex items-center gap-2.5">
-              <CheckCircle className="h-4.5 w-4.5 text-brand-cyan shrink-0" />
-              <span>Faturamento, relatórios de DRE e lucros em tempo real</span>
-            </li>
-          </ul>
-
-          <div className="space-y-3 pt-1">
-            <button
-              onClick={handlePaymentClick}
-              disabled={isGeneratingPayment}
-              className={`w-full bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-black uppercase tracking-wider py-4 px-6 rounded-2xl shadow-lg shadow-emerald-500/15 hover:shadow-emerald-500/25 transition duration-200 flex items-center justify-center gap-2.5 block text-center font-sans hover:scale-[1.02] cursor-pointer ${isGeneratingPayment ? "opacity-50 cursor-not-allowed" : ""}`}
-            >
-              <DollarSign className={`h-4.5 w-4.5 ${isGeneratingPayment ? "animate-spin" : "animate-pulse"}`} />
-              <span>{isGeneratingPayment ? "PROCESSANDO PAGAMENTO..." : "EFETUAR PAGAMENTO AGORA"}</span>
-            </button>
-
-            {error && (
-              <div className="p-3 bg-red-950/40 border border-red-500/30 rounded-xl text-red-400 text-xs font-mono text-center">
-                ⚠️ {error}
-              </div>
-            )}
-            
-            <button
-              onClick={handleLogout}
-              className="w-full bg-slate-900 hover:bg-slate-850 text-slate-400 hover:text-white font-bold uppercase tracking-wider py-3 px-6 rounded-2xl border border-slate-800 transition duration-150 flex items-center justify-center gap-2 block text-center font-sans text-xs cursor-pointer"
-            >
-              <span>Sair e Desativar Alerta</span>
-            </button>
-          </div>
-
-          <p className="text-[9px] text-slate-500 font-mono uppercase tracking-wider">
-            🛡️ Ativação segura e automática. Sem multas ou fidelidade.
-          </p>
-        </div>
-      </main>
-
-      {/* Footer of Billing Screen */}
-      <footer className="border-t border-slate-850 bg-slate-950/40 py-4.5 px-6 text-center text-[10px] text-slate-500 font-mono select-none z-10 uppercase tracking-widest">
-        🛡️ SISTEMA DE RECIBOS & VENDAS SECURE TENANT • TOQUE EM QUALQUER LUGAR PARA TESTAR O SOM DO SISTEMA
-      </footer>
     </div>
   );
 }
