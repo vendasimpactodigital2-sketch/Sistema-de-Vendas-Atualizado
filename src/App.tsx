@@ -1438,7 +1438,7 @@ export default function App() {
           if (salesMetaRes && !salesMetaRes.error && salesMetaRes.data) {
             const remoteSalesMeta = salesMetaRes.data;
             const actualSalesMeta = remoteSalesMeta.filter(
-              (r: any) => r.id !== "cash_register_state" && r.id !== "quick_sales_config"
+              (r: any) => !r.id.startsWith("cash_register_state") && r.id !== "quick_sales_config"
             );
             const localSalesCombined = [...sales, ...budgets];
 
@@ -1473,7 +1473,9 @@ export default function App() {
             }
 
             // Check cash register state metadata
-            const remoteRegisterRow = remoteSalesMeta.find((r: any) => r.id === "cash_register_state");
+            const remoteRegisterRow = remoteSalesMeta.find(
+              (r: any) => r.id === `cash_register_state_${companyOwnerId}` || r.id === "cash_register_state" || (typeof r.id === "string" && r.id.startsWith("cash_register_state"))
+            );
             const localSyncedRegisterDate = localStorage.getItem("NUCLEO_LAST_CASH_REGISTER_SYNCED_DATE") || "";
             if (remoteRegisterRow) {
               if (remoteRegisterRow.date === localSyncedRegisterDate) {
@@ -1691,7 +1693,7 @@ export default function App() {
                 const { data } = await supabase
                   .from("sales")
                   .select("date")
-                  .eq("id", "cash_register_state")
+                  .in("id", [`cash_register_state_${companyOwnerId}`, "cash_register_state"])
                   .eq("user_id", companyOwnerId)
                   .maybeSingle();
                 if (data?.date) {
@@ -1772,7 +1774,7 @@ export default function App() {
           if (
             payload.table === "sales" &&
             payload.new &&
-            (payload.new as any).id === "cash_register_state" &&
+            (String((payload.new as any).id || "").startsWith("cash_register_state")) &&
             (payload.eventType === "UPDATE" || payload.eventType === "INSERT")
           ) {
             try {
@@ -3229,9 +3231,6 @@ export default function App() {
     if (currentUser && isSupabaseConfigured()) {
       const companyId = currentUser.owner_id || currentUser.id;
       await dbSaveCashRegister(companyId, updatedState);
-      if (currentUser.id && currentUser.id !== companyId) {
-        await dbSaveCashRegister(currentUser.id, updatedState);
-      }
       await dbOpenGlobalCashRegister(companyId, newSession);
     }
 
@@ -3407,9 +3406,6 @@ export default function App() {
     if (currentUser && isSupabaseConfigured()) {
       const companyId = currentUser.owner_id || currentUser.id;
       await dbSaveCashRegister(companyId, updatedState);
-      if (currentUser.id && currentUser.id !== companyId) {
-        await dbSaveCashRegister(currentUser.id, updatedState);
-      }
       await dbCloseGlobalCashRegister(companyId, currentSession.id, closedSession);
     }
 

@@ -878,7 +878,7 @@ export async function dbGetSales(userId: string): Promise<Sale[] | null> {
 
     if (!data) return [];
 
-    const filteredData = data.filter((d: any) => d.id !== "quick_sales_config" && d.id !== "cash_register_state");
+    const filteredData = data.filter((d: any) => d.id !== "quick_sales_config" && !d.id.startsWith("cash_register_state"));
 
     return filteredData.map((d) => {
       let realPhone = d.client_phone || "";
@@ -1449,7 +1449,7 @@ export async function dbExportAllData(ownerId: string): Promise<{
 
     return {
       produtos: produtos || [],
-      sales: (salesRaw || []).filter((d: any) => d.id !== "quick_sales_config" && d.id !== "cash_register_state"),
+      sales: (salesRaw || []).filter((d: any) => d.id !== "quick_sales_config" && !d.id.startsWith("cash_register_state")),
       expenses: expenses || [],
       gastos_mensais: gastos_mensais || [],
       clientes: clientes || [],
@@ -1581,7 +1581,8 @@ export async function dbImportAllData(
         .from("sales")
         .delete()
         .eq("user_id", currentOwnerId)
-        .not("id", "in", '("quick_sales_config","cash_register_state")');
+        .not("id", "in", '("quick_sales_config","cash_register_state")')
+        .not("id", "like", "cash_register_state%");
       if (delErr) console.warn("Aviso ao limpar vendas:", delErr.message);
 
       if (backupData.sales.length > 0) {
@@ -1765,27 +1766,54 @@ export async function dbGetCashRegister(userId: string): Promise<CashRegisterSta
   if (!supabase) return null;
 
   try {
+    // 1. Primary check: check user-scoped row cash_register_state_${userId}
     let { data, error } = await supabase
       .from("sales")
       .select("items")
-      .eq("id", "cash_register_state")
-      .eq("user_id", userId)
+      .eq("id", `cash_register_state_${userId}`)
       .maybeSingle();
 
-    // Fallback attempt: if not found with userId, try with current auth UID
-    if ((error || !data || !data.items) && supabase.auth) {
+    // 2. Secondary check: check legacy row with static id: cash_register_state
+    if (!data?.items) {
+      const { data: legacyData, error: legacyErr } = await supabase
+        .from("sales")
+        .select("items")
+        .eq("id", "cash_register_state")
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (legacyData?.items) {
+        data = legacyData;
+        error = null;
+      } else if (!error && legacyErr) {
+        error = legacyErr;
+      }
+    }
+
+    // 3. Fallback attempt: if not found with userId, try with current auth UID if different
+    if ((!data || !data.items) && supabase.auth) {
       try {
         const { data: authData } = await supabase.auth.getUser();
         if (authData?.user?.id && authData.user.id !== userId) {
-          const { data: fallbackData } = await supabase
+          const authId = authData.user.id;
+          const { data: authScopedData } = await supabase
             .from("sales")
             .select("items")
-            .eq("id", "cash_register_state")
-            .eq("user_id", authData.user.id)
+            .eq("id", `cash_register_state_${authId}`)
             .maybeSingle();
-          if (fallbackData?.items) {
-            data = fallbackData;
+          if (authScopedData?.items) {
+            data = authScopedData;
             error = null;
+          } else {
+            const { data: authLegacyData } = await supabase
+              .from("sales")
+              .select("items")
+              .eq("id", "cash_register_state")
+              .eq("user_id", authId)
+              .maybeSingle();
+            if (authLegacyData?.items) {
+              data = authLegacyData;
+              error = null;
+            }
           }
         }
       } catch (authErr) {
@@ -1794,7 +1822,7 @@ export async function dbGetCashRegister(userId: string): Promise<CashRegisterSta
     }
 
     if (error) {
-      console.error("Error fetching cash register state:", error);
+      console.warn("Notice: could not fetch remote cash register state from Supabase:", error.message || error);
       return null;
     }
 
@@ -1806,7 +1834,7 @@ export async function dbGetCashRegister(userId: string): Promise<CashRegisterSta
 
     return data.items as unknown as CashRegisterState;
   } catch (err) {
-    console.error("Supabase get cash register state exception:", err);
+    console.warn("Notice: get cash register state exception:", err);
     return null;
   }
 }
@@ -1817,9 +1845,20 @@ export async function dbSaveCashRegister(userId: string, state: CashRegisterStat
 
   const nowISO = new Date().toISOString();
 
-  const payload: any = {
-    id: "cash_register_state",
-    user_id: userId,
+  // Try to inspect authenticated user ID
+  let authUserId: string | null = null;
+  if (supabase.auth) {
+    try {
+      const { data: authData } = await supabase.auth.getUser();
+      authUserId = authData?.user?.id || null;
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  const createPayload = (rowId: string, uid: string) => ({
+    id: rowId,
+    user_id: uid,
     client_name: "CASH_REGISTER_SYNCED_STATE",
     client_phone: "CASH_REGISTER",
     items: state as any,
@@ -1832,47 +1871,70 @@ export async function dbSaveCashRegister(userId: string, state: CashRegisterStat
     down_payment: 0,
     motoboy_cost: 0,
     date: nowISO
-  };
+  });
+
+  let saved = false;
+
+  // 1. Primary: upsert to user-scoped row cash_register_state_${userId}
+  try {
+    const scopedPayload = createPayload(`cash_register_state_${userId}`, userId);
+    const { error: scopedError } = await supabase
+      .from("sales")
+      .upsert(scopedPayload);
+
+    if (!scopedError) {
+      saved = true;
+    } else if (scopedError.code === "42501" && authUserId && authUserId !== userId) {
+      // RLS policy requires auth.uid() = user_id. Use authUserId to satisfy RLS!
+      const authScopedPayload = createPayload(`cash_register_state_${authUserId}`, authUserId);
+      const { error: authError } = await supabase
+        .from("sales")
+        .upsert(authScopedPayload);
+      if (!authError) {
+        saved = true;
+      }
+    } else if (scopedError) {
+      console.warn("Notice: Scoped cash register upsert returned:", scopedError.message || scopedError);
+    }
+  } catch (err) {
+    // Continue
+  }
+
+  // 2. Secondary: also try updating legacy static id "cash_register_state" if permissible
+  try {
+    const effectiveUserId = (authUserId && authUserId !== userId) ? authUserId : userId;
+    const legacyPayload = createPayload("cash_register_state", effectiveUserId);
+    const { error: legacyErr } = await supabase
+      .from("sales")
+      .upsert(legacyPayload);
+    if (!legacyErr) {
+      saved = true;
+    }
+  } catch (err) {
+    // Ignore legacy conflict
+  }
+
+  // 3. Redundancy: if attendant is authenticated with authUserId different from company userId, ensure attendant's scoped row is also updated
+  if (authUserId && authUserId !== userId) {
+    try {
+      const authScopedPayload = createPayload(`cash_register_state_${authUserId}`, authUserId);
+      const { error: dualErr } = await supabase
+        .from("sales")
+        .upsert(authScopedPayload);
+      if (!dualErr) {
+        saved = true;
+      }
+    } catch (e) {}
+  }
 
   try {
-    let { error } = await supabase
-      .from("sales")
-      .upsert(payload);
-
-    // If upsert fails (for example due to foreign key / RLS on userId), try with authenticated user's ID
-    if (error && supabase.auth) {
-      try {
-        const { data: authData } = await supabase.auth.getUser();
-        if (authData?.user?.id && authData.user.id !== userId) {
-          const fallbackPayload = { ...payload, user_id: authData.user.id };
-          const { error: fallbackError } = await supabase
-            .from("sales")
-            .upsert(fallbackPayload);
-          if (!fallbackError) {
-            error = null;
-          }
-        }
-      } catch (authErr) {
-        // ignore
-      }
-    }
-
-    if (error) {
-      console.error("Error upserting cash register state:", error);
-      return false;
-    }
-
-    try {
-      localStorage.setItem("NUCLEO_LAST_CASH_REGISTER_SYNCED_DATE", nowISO);
-    } catch (e) {
-      console.warn("Storage write failed:", e);
-    }
-
-    return true;
-  } catch (err) {
-    console.error("Supabase save cash register state exception:", err);
-    return false;
+    localStorage.setItem("NUCLEO_LAST_CASH_REGISTER_SYNCED_DATE", nowISO);
+    localStorage.setItem("NUCLEO_CASH_REGISTER", JSON.stringify(state));
+  } catch (e) {
+    console.warn("Storage write failed:", e);
   }
+
+  return saved;
 }
 
 // ==========================================
