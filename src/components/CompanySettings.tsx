@@ -93,7 +93,7 @@ export function CompanySettings({
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [openingTime, setOpeningTime] = useState(company.openingTime || "08:00");
   const [closingTime, setClosingTime] = useState(company.closingTime || "18:00");
-  const [autoCloseRegisterEnabled, setAutoCloseRegisterEnabled] = useState(company.autoCloseRegisterEnabled ?? true);
+  const [autoCloseRegisterEnabled, setAutoCloseRegisterEnabled] = useState(company.autoCloseRegisterEnabled ?? false);
   const [autoBackupDownloadEnabled, setAutoBackupDownloadEnabled] = useState(company.autoBackupDownloadEnabled ?? true);
   
   const [businessHours, setBusinessHours] = useState<BusinessHours>(() => {

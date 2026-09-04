@@ -112,7 +112,7 @@ export const cleanDefaultCompanyProfile: CompanyProfile = {
   pixKey: "",
   openingTime: "08:00",
   closingTime: "18:00",
-  autoCloseRegisterEnabled: true,
+  autoCloseRegisterEnabled: false,
   autoBackupDownloadEnabled: true,
   goalsReminderEnabled: false,
   goalsReminderTime: "09:00",
@@ -906,18 +906,28 @@ export default function App() {
 
   const checkGlobalRegisterStatus = async (userIdToUse?: string) => {
     const userToVerify = userIdToUse || currentUser?.id;
+    const isLocalOpen = !!cashRegisterRef.current?.currentSession && cashRegisterRef.current.currentSession.status === "aberto";
+
     if (!userToVerify || !isSupabaseConfigured()) {
-      setIsGlobalRegisterOpen(!!cashRegister?.currentSession);
-      return !!cashRegister?.currentSession;
+      setIsGlobalRegisterOpen(isLocalOpen);
+      return isLocalOpen;
     }
     try {
       const open = await dbCheckGlobalCashRegister(userToVerify);
+      // NEVER force isGlobalRegisterOpen to false if the local cash register is actively open!
+      if (!open && isLocalOpen) {
+        setIsGlobalRegisterOpen(true);
+        if (cashRegisterRef.current) {
+          dbSaveCashRegister(userToVerify, cashRegisterRef.current).catch(console.error);
+        }
+        return true;
+      }
       setIsGlobalRegisterOpen(open);
       return open;
     } catch (err) {
       console.error("Error checking global register status:", err);
-      setIsGlobalRegisterOpen(!!cashRegister?.currentSession);
-      return !!cashRegister?.currentSession;
+      setIsGlobalRegisterOpen(isLocalOpen);
+      return isLocalOpen;
     }
   };
 
@@ -1627,9 +1637,47 @@ export default function App() {
         if (registerPromiseIdx !== -1) {
           const remote = dataResults[registerPromiseIdx];
           if (remote) {
-            setCashRegister(remote);
-            setIsGlobalRegisterOpen(!!remote?.currentSession && remote.currentSession.status === "aberto");
-            localStorage.setItem("NUCLEO_CASH_REGISTER", JSON.stringify(remote));
+            const currentLocal = cashRegisterRef.current;
+            const localHasActive = !!currentLocal?.currentSession && currentLocal.currentSession.status === "aberto";
+            const remoteHasActive = !!remote?.currentSession && remote.currentSession.status === "aberto";
+
+            if (localHasActive && !remoteHasActive) {
+              // Local is currently open, but remote does not have an active session.
+              // Check if remote history actually contains an explicit closure of THIS local session:
+              const localSessionId = currentLocal.currentSession!.id;
+              const localOpenTime = new Date(currentLocal.currentSession!.dataAbertura).getTime();
+
+              const isExplicitlyClosedInRemote = (remote.history || []).some((s: any) => {
+                if (s.id === localSessionId && s.status === "fechado") return true;
+                if (s.dataFechamento) {
+                  const closeTime = new Date(s.dataFechamento).getTime();
+                  if (closeTime > localOpenTime) return true;
+                }
+                return false;
+              });
+
+              if (isExplicitlyClosedInRemote) {
+                // Legitimate remote closure
+                setCashRegister(remote);
+                setIsGlobalRegisterOpen(false);
+                localStorage.setItem("NUCLEO_CASH_REGISTER", JSON.stringify(remote));
+              } else {
+                // Stale remote state or save in flight: preserve the active local session!
+                console.warn("[Cash Register Sync] Remote is missing active session. Preserving local active session and pushing to remote.");
+                const combinedState: CashRegisterState = {
+                  currentSession: currentLocal.currentSession,
+                  history: remote.history && remote.history.length > 0 ? remote.history : currentLocal.history
+                };
+                setCashRegister(combinedState);
+                setIsGlobalRegisterOpen(true);
+                localStorage.setItem("NUCLEO_CASH_REGISTER", JSON.stringify(combinedState));
+                dbSaveCashRegister(companyOwnerId, combinedState).catch(console.error);
+              }
+            } else {
+              setCashRegister(remote);
+              setIsGlobalRegisterOpen(remoteHasActive);
+              localStorage.setItem("NUCLEO_CASH_REGISTER", JSON.stringify(remote));
+            }
 
             // Persist the synced date we stored as pending
             const pendingDate = localStorage.getItem("NUCLEO_LAST_CASH_REGISTER_SYNCED_DATE_PENDING");
@@ -1731,7 +1779,27 @@ export default function App() {
               const remoteState = (payload.new as any).items as any;
               if (remoteState && typeof remoteState === "object") {
                 const remoteIsOpen = !!remoteState?.currentSession && remoteState.currentSession.status === "aberto";
-                const localIsOpen = !!cashRegisterRef.current?.currentSession && cashRegisterRef.current.currentSession.status === "aberto";
+                const currentLocal = cashRegisterRef.current;
+                const localIsOpen = !!currentLocal?.currentSession && currentLocal.currentSession.status === "aberto";
+
+                if (localIsOpen && !remoteIsOpen) {
+                  const localSessionId = currentLocal.currentSession!.id;
+                  const localOpenTime = new Date(currentLocal.currentSession!.dataAbertura).getTime();
+
+                  const isExplicitlyClosedInRemote = (remoteState.history || []).some((s: any) => {
+                    if (s.id === localSessionId && s.status === "fechado") return true;
+                    if (s.dataFechamento) {
+                      const closeTime = new Date(s.dataFechamento).getTime();
+                      if (closeTime > localOpenTime) return true;
+                    }
+                    return false;
+                  });
+
+                  if (!isExplicitlyClosedInRemote) {
+                    console.warn("[Realtime Cash Register] Rejecting stale closed payload; keeping active local session open.");
+                    return;
+                  }
+                }
 
                 if (remoteIsOpen !== localIsOpen) {
                   console.warn(
@@ -3161,6 +3229,9 @@ export default function App() {
     if (currentUser && isSupabaseConfigured()) {
       const companyId = currentUser.owner_id || currentUser.id;
       await dbSaveCashRegister(companyId, updatedState);
+      if (currentUser.id && currentUser.id !== companyId) {
+        await dbSaveCashRegister(currentUser.id, updatedState);
+      }
       await dbOpenGlobalCashRegister(companyId, newSession);
     }
 
@@ -3336,6 +3407,9 @@ export default function App() {
     if (currentUser && isSupabaseConfigured()) {
       const companyId = currentUser.owner_id || currentUser.id;
       await dbSaveCashRegister(companyId, updatedState);
+      if (currentUser.id && currentUser.id !== companyId) {
+        await dbSaveCashRegister(currentUser.id, updatedState);
+      }
       await dbCloseGlobalCashRegister(companyId, currentSession.id, closedSession);
     }
 

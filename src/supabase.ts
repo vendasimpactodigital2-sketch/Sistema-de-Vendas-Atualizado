@@ -1765,12 +1765,33 @@ export async function dbGetCashRegister(userId: string): Promise<CashRegisterSta
   if (!supabase) return null;
 
   try {
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from("sales")
       .select("items")
       .eq("id", "cash_register_state")
       .eq("user_id", userId)
       .maybeSingle();
+
+    // Fallback attempt: if not found with userId, try with current auth UID
+    if ((error || !data || !data.items) && supabase.auth) {
+      try {
+        const { data: authData } = await supabase.auth.getUser();
+        if (authData?.user?.id && authData.user.id !== userId) {
+          const { data: fallbackData } = await supabase
+            .from("sales")
+            .select("items")
+            .eq("id", "cash_register_state")
+            .eq("user_id", authData.user.id)
+            .maybeSingle();
+          if (fallbackData?.items) {
+            data = fallbackData;
+            error = null;
+          }
+        }
+      } catch (authErr) {
+        // ignore fallback error
+      }
+    }
 
     if (error) {
       console.error("Error fetching cash register state:", error);
@@ -1778,7 +1799,9 @@ export async function dbGetCashRegister(userId: string): Promise<CashRegisterSta
     }
 
     if (!data || !data.items) {
-      return { currentSession: null, history: [] };
+      // Return null so the caller knows there is NO remote state recorded in Supabase,
+      // preventing it from clobbering an active local session with an empty null state!
+      return null;
     }
 
     return data.items as unknown as CashRegisterState;
@@ -1794,18 +1817,45 @@ export async function dbSaveCashRegister(userId: string, state: CashRegisterStat
 
   const nowISO = new Date().toISOString();
 
+  const payload: any = {
+    id: "cash_register_state",
+    user_id: userId,
+    client_name: "CASH_REGISTER_SYNCED_STATE",
+    client_phone: "CASH_REGISTER",
+    items: state as any,
+    total_value: 0,
+    is_budget: true,
+    operation_cost: 0,
+    balance_due: 0,
+    net_profit: 0,
+    discount: 0,
+    down_payment: 0,
+    motoboy_cost: 0,
+    date: nowISO
+  };
+
   try {
-    const { error } = await supabase
+    let { error } = await supabase
       .from("sales")
-      .upsert({
-        id: "cash_register_state",
-        user_id: userId,
-        client_name: "CASH_REGISTER_SYNCED_STATE",
-        items: state as any,
-        total_value: 0,
-        is_budget: true,
-        date: nowISO
-      });
+      .upsert(payload);
+
+    // If upsert fails (for example due to foreign key / RLS on userId), try with authenticated user's ID
+    if (error && supabase.auth) {
+      try {
+        const { data: authData } = await supabase.auth.getUser();
+        if (authData?.user?.id && authData.user.id !== userId) {
+          const fallbackPayload = { ...payload, user_id: authData.user.id };
+          const { error: fallbackError } = await supabase
+            .from("sales")
+            .upsert(fallbackPayload);
+          if (!fallbackError) {
+            error = null;
+          }
+        }
+      } catch (authErr) {
+        // ignore
+      }
+    }
 
     if (error) {
       console.error("Error upserting cash register state:", error);
